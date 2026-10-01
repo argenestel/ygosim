@@ -121,6 +121,12 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     submit([opts[0].id]);
   };
 
+  // Dev-only automation hook for browser tests / demo scripts.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    (window as unknown as { __ygosim?: unknown }).__ygosim = { prompt, state, busy: view.busy, submit: (ids: string[]) => prompt && respond(prompt.promptId, ids) };
+  }, [prompt, state, view.busy, respond]);
+
   const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover" }] : []);
   const chainNow = state?.chain ?? [];
 
