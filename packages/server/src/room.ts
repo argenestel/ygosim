@@ -10,7 +10,7 @@ export interface Participant {
   bot?: Bot;
 }
 
-export type CreateDuel = (opts: DuelOptions) => Promise<Duel>;
+export type CreateDuel = (opts: DuelOptions & { format?: FormatId; firstPlayer?: PlayerIdx }) => Promise<Duel>;
 
 export interface RoomOptions {
   turnTimeoutMs?: number;     // per decision; default 180s (LLM-friendly)
@@ -44,6 +44,7 @@ export class Room {
   private duel?: Duel;
   private wait?: PendingWait;
   private surrendered?: PlayerIdx;
+  private siding?: Map<PlayerIdx, () => void>;
   readonly opts: Required<Omit<RoomOptions, "seed">> & { seed?: number };
   /** Resolves when the duel loop finishes. */
   finished?: Promise<void>;
@@ -79,8 +80,8 @@ export class Room {
     }
     const idx = (this.seats[0] ? 1 : 0) as PlayerIdx;
     this.seats[idx] = p;
-    this.decks[idx] = { ...deck };
-    this.originalDecks[idx] = { ...deck };
+    this.decks[idx] = structuredClone(deck);
+    this.originalDecks[idx] = structuredClone(deck);
     this.broadcastRoom();
     if (this.isFull) this.finished = this.run();
     return idx;
@@ -108,8 +109,8 @@ export class Room {
       match: this.match,
     };
     if (this.match === "match") {
-      (msg as any).score = this.score;
-      (msg as any).game = this.game;
+      msg.score = [...this.score];
+      msg.game = this.game;
     }
     return msg;
   }
@@ -137,6 +138,15 @@ export class Room {
     w.resolve(action);
   }
 
+  submitSideDeck(p: Participant, deck: Deck) {
+    const seat = this.seatOf(p);
+    if (seat === undefined) return safeSend(p, { type: "error", message: "not a player" });
+    if (this.status !== "siding") return safeSend(p, { type: "error", message: "not in siding" });
+    if (!this.siding?.has(seat)) return;
+    this.decks[seat] = structuredClone(deck);
+    this.siding.get(seat)!();
+  }
+
   surrender(p: Participant) {
     const seat = this.seatOf(p);
     if (seat === undefined || this.status !== "dueling") return;
@@ -146,37 +156,79 @@ export class Room {
   }
 
   private async run() {
-    // For single games, just run one duel
-    if (this.match !== "match") {
-      await this.runGame();
-      return;
-    }
-
-    // For matches, run up to 3 games
-    for (;;) {
-      this.status = "dueling";
-      this.broadcastRoom();
-
-      await this.runGame();
-
-      if (this.isGameDone()) break;
-
-      // Prepare for next game
-      this.game++;
-      if (this.game > 3 || this.score[0] > 1 || this.score[1] > 1) {
-        // Match over
-        break;
+    let firstPlayer: PlayerIdx = 0;
+    try {
+      for (;;) {
+        await this.runGame(firstPlayer);
+        if (this.isGameDone()) return;
+        // Save a snapshot before destroying the old duel for the match prompt.
+        const previousWinner = this.winner;
+        const chooser = previousWinner == null ? undefined : (1 - previousWinner) as PlayerIdx;
+        const state = chooser === undefined ? undefined : this.duel!.stateFor(chooser);
+        this.duel?.destroy();
+        this.duel = undefined;
+        await this.sideDecks();
+        this.game++;
+        this.surrendered = undefined;
+        this.status = "dueling";
+        this.broadcastRoom();
+        if (chooser !== undefined && state) {
+          const prompt: Prompt = {
+            promptId: `${this.id}:first:${this.game}`, kind: "first_turn",
+            text: "Choose who takes the first turn", min: 1, max: 1,
+            options: [{ id: "0", label: "Player 0 goes first" }, { id: "1", label: "Player 1 goes first" }],
+          };
+          const seat = this.seats[chooser]!;
+          let action: Action;
+          if (seat.bot) action = legalize(prompt, await seat.bot.choose(state, prompt));
+          else {
+            const answer = this.waitFor(chooser, prompt);
+            safeSend(seat, { type: "prompt", prompt, state });
+            action = await answer;
+          }
+          firstPlayer = Number(action.choose[0]) as PlayerIdx;
+        }
       }
-
-      // Reset for next game (decks stay the same, no siding in this version)
+    } catch (e) {
+      console.error(`[room ${this.id}]`, e);
+      this.broadcast({ type: "error", message: `duel aborted: ${(e as Error).message}` });
+      this.status = "done";
+      this.broadcastRoom();
+    } finally {
+      this.duel?.destroy();
+      this.duel = undefined;
     }
   }
 
-  private async runGame() {
+  private async sideDecks() {
+    this.status = "siding";
+    const confirmations = new Map<PlayerIdx, () => void>();
+    this.siding = confirmations;
+    const waits = ([0, 1] as const).map(player => {
+      if (this.seats[player]!.bot) {
+        this.decks[player] = structuredClone(this.originalDecks[player]!);
+        return Promise.resolve();
+      }
+      return new Promise<void>(resolve => {
+        const done = () => {
+          clearTimeout(timer);
+          confirmations.delete(player);
+          resolve();
+        };
+        const timer = setTimeout(done, 60_000);
+        confirmations.set(player, done);
+      });
+    });
+    this.broadcastRoom();
+    await Promise.all(waits);
+    this.siding = undefined;
+  }
+
+  private async runGame(firstPlayer: PlayerIdx) {
     this.status = "dueling";
     this.broadcastRoom();
     try {
-      this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed });
+      this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed, format: this.format, firstPlayer });
       for (;;) {
         if (this.surrendered !== undefined) {
           this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
@@ -186,9 +238,6 @@ export class Room {
         this.sendEvents(res.events);
         if (res.ended || !res.pending) {
           const gameWinner = res.ended?.winner ?? null;
-          if (this.match === "match" && gameWinner !== null) {
-            this.score[gameWinner]++;
-          }
           this.finish(gameWinner, res.ended?.reason ?? "ended", !!res.events.some((e) => e.t === "win"));
           break;
         }
@@ -200,8 +249,6 @@ export class Room {
       this.broadcast({ type: "error", message: `duel aborted: ${(e as Error).message}` });
       this.status = "done";
       this.broadcastRoom();
-    } finally {
-      this.duel?.destroy();
     }
   }
 
@@ -219,8 +266,9 @@ export class Room {
         } catch { cand = undefined; }
         action = legalize(prompt, cand);
       } else {
+        const answer = this.waitFor(player, prompt);
         safeSend(seat, { type: "prompt", prompt, state: duel.stateFor(player) });
-        action = await this.waitFor(player, prompt);
+        action = await answer;
       }
       if (this.surrendered !== undefined) return;
       try {
@@ -270,7 +318,8 @@ export class Room {
 
   private finish(winner: PlayerIdx | null, reason: string, alreadyAnnounced = false) {
     this.winner = winner;
-    this.status = "done";
+    if (this.match === "match" && winner !== null) this.score[winner]++;
+    this.status = this.match !== "match" || this.score.some(score => score >= 2) || this.game >= 3 ? "done" : "dueling";
     if (!alreadyAnnounced && this.duel) {
       const ev = [{ t: "win" as const, winner, reason }];
       for (const idx of [0, 1] as const) {
@@ -279,7 +328,7 @@ export class Room {
       }
       for (const s of this.spectators) safeSend(s, { type: "events", events: ev, state: this.duel.stateFor(0) });
     }
-    this.broadcastRoom();
+    if (this.status === "done") this.broadcastRoom();
   }
 }
 

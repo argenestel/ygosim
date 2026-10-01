@@ -60,6 +60,9 @@ export class Lobby {
         room.join(s, msg.deck);
         return;
       }
+      case "side_deck":
+        if (!s.room) return err("not in a room");
+        return s.room.submitSideDeck(s, msg.deck);
       case "action":
         if (!s.room) return err("not in a room");
         return s.room.submit(s, msg.action);
