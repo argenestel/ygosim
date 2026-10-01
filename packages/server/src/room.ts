@@ -227,28 +227,21 @@ export class Room {
   private async runGame(firstPlayer: PlayerIdx) {
     this.status = "dueling";
     this.broadcastRoom();
-    try {
-      this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed, format: this.format, firstPlayer });
-      for (;;) {
-        if (this.surrendered !== undefined) {
-          this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
-          break;
-        }
-        const res = await this.duel.step();
-        this.sendEvents(res.events);
-        if (res.ended || !res.pending) {
-          const gameWinner = res.ended?.winner ?? null;
-          this.finish(gameWinner, res.ended?.reason ?? "ended", !!res.events.some((e) => e.t === "win"));
-          break;
-        }
-        const { player, prompt } = res.pending;
-        await this.resolvePrompt(player, prompt);
+    this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed, format: this.format, firstPlayer });
+    for (;;) {
+      if (this.surrendered !== undefined) {
+        this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
+        break;
       }
-    } catch (e) {
-      console.error(`[room ${this.id}]`, e);
-      this.broadcast({ type: "error", message: `duel aborted: ${(e as Error).message}` });
-      this.status = "done";
-      this.broadcastRoom();
+      const res = await this.duel.step();
+      this.sendEvents(res.events);
+      if (res.ended || !res.pending) {
+        const gameWinner = res.ended?.winner ?? null;
+        this.finish(gameWinner, res.ended?.reason ?? "ended", !!res.events.some((e) => e.t === "win"));
+        break;
+      }
+      const { player, prompt } = res.pending;
+      await this.resolvePrompt(player, prompt);
     }
   }
 

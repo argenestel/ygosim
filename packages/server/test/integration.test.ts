@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { WebSocket } from "ws";
 import type { ClientMsg, Deck, ServerMsg } from "@ygosim/protocol";
 import { startServer } from "../src/server.js";
@@ -8,8 +8,8 @@ import { Lobby } from "../src/lobby.js";
 import { loadEngine } from "../src/engine.js";
 
 function matchDecks() {
-  const original = sampleDecks().find(d => d.id === "vanilla-dragons")?.deck;
-  if (!original) throw new Error("vanilla-dragons sample deck is required");
+  const original = sampleDecks().find(d => d.id === "junk-synchro")?.deck;
+  if (!original) throw new Error("junk synchro sample deck is required");
   const deck: Deck = { ...structuredClone(original), side: [4148264] };
   const sided = structuredClone(deck);
   [sided.main[0], sided.side[0]] = [sided.side[0], sided.main[0]];
@@ -20,7 +20,12 @@ function matchDecks() {
 describe("Live Integration Test (WebSocket)", { skip: !process.env.YGOSIM_TEST_ENGINE }, () => {
   async function play(match: "single" | "match") {
     const { deck, sided } = matchDecks();
-    const server = await startServer({ port: 0, botDelayMs: 0, turnTimeoutMs: 5000 });
+    const engine = await loadEngine();
+    if (!engine) throw new Error("YGOSIM_TEST_ENGINE requires the real engine");
+    const server = await startServer({
+      port: 0, engine, botDelayMs: 0, turnTimeoutMs: 5000,
+      createDuel: opts => engine.createDuel({ ...opts, seed: 1 }),
+    });
     const ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
     const messages: ServerMsg[] = [];
     const sidedGames = new Set<number>();
@@ -124,6 +129,7 @@ describe("Live Integration Test (WebSocket)", { skip: !process.env.YGOSIM_TEST_E
     });
     lobby.handle(session, { type: "hello", name: "Integration Player", kind: "human" });
     lobby.handle(session, { type: "create_room", vsAI: true, aiLevel: "normal", format: "unlimited", match: "match", deck });
+    await vi.waitFor(() => expect(session.room).toBeDefined());
     const room = session.room!;
     await room.finished;
     expect(messages.filter(msg => msg.type === "error")).toEqual([]);
