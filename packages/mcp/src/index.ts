@@ -17,4 +17,5 @@ for (const t of session.tools()) {
 
 await server.connect(new StdioServerTransport());
 server.server.onclose = () => session.client.close();
+process.stdin.once("end", () => { session.client.close(); void server.close(); });
 for (const signal of ["SIGINT", "SIGTERM"] as const) process.on(signal, () => { session.client.close(); process.exit(0); });

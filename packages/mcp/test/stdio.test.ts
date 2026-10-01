@@ -1,5 +1,6 @@
 import { execFile, spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { promisify } from "node:util";
+import { symlink, unlink } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { once } from "node:events";
@@ -31,8 +32,8 @@ let baseUrl = "ws://localhost:7777";
 // Node's spawned stdio uses socketpairs on Linux. Restricted sandboxes can
 // allow ordinary pipes while blocking those sockets; shell cat supplies pipes.
 const executable = (entry: string) => inMemory
-  ? { command: "/bin/sh", args: ["-c", `cat | node dist/${entry}.js | cat`] }
-  : { command: process.execPath, args: [`dist/${entry}.js`] };
+  ? { command: "/bin/sh", args: ["-c", `cat | node dist/${entry} | cat`] }
+  : { command: process.execPath, args: [`dist/${entry}`] };
 beforeAll(async () => {
   // Exercise generated executable shims rather than only importing the source modules.
   await promisify(execFile)(process.execPath, ["node_modules/typescript/bin/tsc", "-p", "tsconfig.json"], { cwd: packageDir });
@@ -52,7 +53,7 @@ afterAll(async () => {
 });
 
 it("initializes the stdio MCP server, lists all tools, calls them, and reports errors", async () => {
-  const transport = new StdioClientTransport({ ...executable("index"), cwd: packageDir, env: { ...process.env as Record<string, string>, YGOSIM_URL: baseUrl }, stderr: "pipe" });
+  const transport = new StdioClientTransport({ ...executable("index.js"), cwd: packageDir, env: { ...process.env as Record<string, string>, YGOSIM_URL: baseUrl }, stderr: "pipe" });
   const client = new Client({ name: "test", version: "1.0.0" });
   let stderr = "";
   transport.stderr?.on("data", (chunk) => { stderr += String(chunk); });
@@ -61,8 +62,8 @@ it("initializes the stdio MCP server, lists all tools, calls them, and reports e
     const { tools } = await client.listTools();
     expect(tools.map((tool) => tool.name).sort()).toEqual(["list_rooms", "create_room", "join_room", "wait_for_turn", "get_state", "act", "card_info", "chat", "surrender"].sort());
     if (!inMemory) {
-    expect(await client.callTool({ name: "card_info", arguments: { name: "Blue-Eyes" } })).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Blue-Eyes White Dragon") }] });
-    expect(await client.callTool({ name: "create_room", arguments: {} })).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("stdio-room") }] });
+      expect(await client.callTool({ name: "card_info", arguments: { name: "Blue-Eyes" } })).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("Blue-Eyes White Dragon") }] });
+      expect(await client.callTool({ name: "create_room", arguments: {} })).toMatchObject({ content: [{ type: "text", text: expect.stringContaining("stdio-room") }] });
     }
     expect(await client.callTool({ name: "act", arguments: { choose: [1], wait: false } })).toMatchObject({ isError: true, content: [{ type: "text", text: expect.stringContaining("no pending prompt") }] });
     expect(stderr).toBe("");
@@ -70,7 +71,7 @@ it("initializes the stdio MCP server, lists all tools, calls them, and reports e
 });
 
 it.skipIf(inMemory)("runs the JSON-lines executable with ordered responses and clean shutdown", async () => {
-  const child: ChildProcessWithoutNullStreams = spawn(executable("cli").command, executable("cli").args, { cwd: packageDir, env: { ...process.env, YGOSIM_URL: baseUrl } });
+  const child: ChildProcessWithoutNullStreams = spawn(executable("cli.js").command, executable("cli.js").args, { cwd: packageDir, env: { ...process.env, YGOSIM_URL: baseUrl } });
   let output = "", errors = "";
   child.stdout.on("data", (chunk) => { output += String(chunk); });
   child.stderr.on("data", (chunk) => { errors += String(chunk); });
@@ -96,7 +97,7 @@ it.skipIf(inMemory)("runs the JSON-lines executable with ordered responses and c
 });
 
 it("keeps the JSON-lines process alive after malformed input without game networking", async () => {
-  const child = spawn(executable("cli").command, executable("cli").args, { cwd: packageDir });
+  const child = spawn(executable("cli.js").command, executable("cli.js").args, { cwd: packageDir });
   let output = "", errors = "";
   child.stdout.on("data", (chunk) => { output += String(chunk); });
   child.stderr.on("data", (chunk) => { errors += String(chunk); });
@@ -112,4 +113,24 @@ it("keeps the JSON-lines process alive after malformed input without game networ
     expect(lines[3]).toMatchObject({ id: 2, ok: true, text: "No duel state yet." });
     expect(errors).toBe("");
   } finally { if (child.exitCode === null) child.kill(); }
+});
+
+it("runs ygosim-agent through a bin symlink and flushes all JSON-lines output on EOF", async () => {
+  const alias = new URL("../dist/ygosim-agent", import.meta.url);
+  await symlink("cli.js", alias);
+  const command = executable("ygosim-agent");
+  const child = spawn(command.command, command.args, { cwd: packageDir });
+  let output = "";
+  child.stdout.on("data", (chunk) => { output += String(chunk); });
+  const closed = once(child, "close");
+  child.stdin.end(Array.from({ length: 100 }, (_, id) => JSON.stringify({ id, tool: "help" })).join("\n") + "\n");
+  try {
+    expect((await closed)[0]).toBe(0);
+    const lines = output.trim().split("\n").map((line) => JSON.parse(line));
+    expect(lines).toHaveLength(100);
+    expect(lines.at(-1)).toMatchObject({ id: 99, ok: true });
+  } finally {
+    if (child.exitCode === null) child.kill();
+    await unlink(alias);
+  }
 });

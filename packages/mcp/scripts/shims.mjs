@@ -2,6 +2,7 @@
 import { writeFileSync, chmodSync } from "node:fs";
 for (const f of ["index", "cli"]) {
   const p = new URL(`../dist/${f}.js`, import.meta.url);
-  writeFileSync(p, `#!/usr/bin/env node\nimport "./mcp/src/${f}.js";\n`);
+  const entry = f === "cli" ? 'import { runCli } from "./mcp/src/cli.js";\nrunCli();' : 'import "./mcp/src/index.js";';
+  writeFileSync(p, `#!/usr/bin/env node\n${entry}\n`);
   chmodSync(p, 0o755);
 }

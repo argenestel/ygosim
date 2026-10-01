@@ -18,6 +18,18 @@ pnpm --filter @ygosim/mcp test
 The tests use a fake HTTP/WebSocket server; no live duel engine is needed. They
 also build and launch both executable entrypoints and use an MCP SDK client to
 verify initialization, tool discovery, tool calls, and error responses over stdio.
+For environments that prohibit socket listeners, use the optional in-memory
+fake-server transport. This runs the same protocol tests and stdio discovery,
+and skips the executable test that requires actual network sockets:
+
+```sh
+YGOSIM_TEST_IN_MEMORY=1 pnpm --filter @ygosim/mcp test
+```
+
+If pnpm attempts an automatic reinstall despite existing dependencies and the
+store is unavailable, add `--config.verify-deps-before-run=false` before
+`--filter` in these build/test commands.
+
 There is no separate lint configuration in this package; typecheck runs strict
 TypeScript checks.
 

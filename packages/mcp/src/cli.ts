@@ -23,8 +23,7 @@ export async function handleLine(session: Session, line: string): Promise<object
   }
 }
 
-const isMain = process.argv[1] && /cli\.js$/.test(process.argv[1]);
-if (isMain) {
+export function runCli() {
   const session = new Session(configFromEnv());
   const rl = createInterface({ input: process.stdin });
   let queue = Promise.resolve();
@@ -32,5 +31,5 @@ if (isMain) {
   rl.on("line", (line) => {
     queue = queue.then(async () => { const r = await handleLine(session, line); if (r) process.stdout.write(JSON.stringify(r) + "\n"); });
   });
-  rl.on("close", () => queue.then(() => { session.client.close(); process.exit(0); }));
+  rl.on("close", () => queue.then(() => { session.client.close(); }));
 }

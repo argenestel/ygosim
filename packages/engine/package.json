@@ -1,0 +1,23 @@
+{
+  "name": "@ygosim/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "tsc --noEmit --noUnusedLocals --noUnusedParameters"
+  },
+  "dependencies": {
+    "@ygosim/protocol": "workspace:*",
+    "ocgcore-wasm": "0.1.2",
+    "sql.js": "^1.13.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/sql.js": "^1.4.9",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  }
+}
