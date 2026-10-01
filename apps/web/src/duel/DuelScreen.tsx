@@ -2,6 +2,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
 import { isMock } from "../api";
+import { isMuted, setMuted, uiClick } from "../sfx";
 import { createMockConn } from "../mock";
 import { connect, type Conn } from "../net";
 import { Board3D } from "../duel3d/Scene3D";
@@ -76,6 +77,15 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const [selected, setSelected] = useState<string[]>([]);
   const [speed, setSpd] = useState(1);
   const [chatText, setChatText] = useState("");
+  const [muted, setMute] = useState(isMuted());
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setMenu(null); setPile(null); }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   useEffect(() => { setSelected([]); setMenu(null); }, [prompt?.promptId]);
 
@@ -88,7 +98,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const selectable = useMemo(() => new Set(byCard.keys()), [byCard]);
   const selectedUids = useMemo(() => new Set(prompt?.options.filter((o) => selected.includes(o.id) && o.card).map((o) => o.card!.uid)), [prompt, selected]);
 
-  const submit = (ids: string[]) => { if (prompt) respond(prompt.promptId, ids); setMenu(null); setPile(null); };
+  const submit = (ids: string[]) => { uiClick(); if (prompt) respond(prompt.promptId, ids); setMenu(null); setPile(null); };
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length < (prompt?.max ?? 1) ? [...s, id] : s));
 
   const onCard = (c: CardRef) => {
@@ -133,6 +143,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         </div>
         <div className="top-tools">
           {[1, 2, 4].map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => { setSpd(s); setSpeed(s); }}>{s}×</button>)}
+          <button title={muted ? "Unmute" : "Mute"} onClick={() => { setMuted(!muted); setMute(!muted); }}>{muted ? "🔇" : "🔊"}</button>
           <button className="danger" onClick={() => send({ type: "surrender" })}>Surrender</button>
         </div>
       </div>

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useReducer, useRef } from "react";
 import type { CardRef, ClientMsg, DuelEvent, DuelState, Prompt, ServerMsg } from "@ygosim/protocol";
 import type { Conn } from "../net";
+import { playEvent } from "../sfx";
 
 export interface Fx { id: number; ev: DuelEvent; }
 
@@ -106,6 +107,7 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
       if (!stateRef.current) stateRef.current = batch.state;
       for (const e of batch.events) {
         const fast = speed.current;
+        if (stateRef.current) playEvent(e, stateRef.current.you);
         if (e.t === "win") { dispatch({ k: "set", patch: { result: { winner: e.winner, reason: e.reason } } }); continue; }
         if (e.t === "hint") continue;
         stateRef.current = applyEvent(stateRef.current, e);
