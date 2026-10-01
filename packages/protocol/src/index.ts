@@ -73,12 +73,13 @@ export type DuelEvent =
 // ---- WebSocket messages ----
 export type ClientMsg =
   | { type: "hello"; name: string; kind: "human" | "agent" }
-  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType }
+  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType; opponent?: OpponentSpec; spectateOnly?: boolean; seconds?: Deck }
   | { type: "join_room"; roomId: string; deck: Deck }
   | { type: "action"; action: Action }
   | { type: "chat"; text: string }
   | { type: "surrender" }
-  | { type: "side_deck"; deck: Deck };   // between games of a match
+  | { type: "side_deck"; deck: Deck }    // between games of a match
+  | { type: "spectate"; roomId: string };
 
 export type ServerMsg =
   | { type: "welcome"; clientId: string }
@@ -86,6 +87,7 @@ export type ServerMsg =
   | { type: "events"; events: DuelEvent[]; state: DuelState }
   | { type: "prompt"; prompt: Prompt; state: DuelState }
   | { type: "chat"; from: string; text: string }
+  | { type: "agent_status"; seat: PlayerIdx; agent: AgentKind; status: AgentStatus; detail?: string }
   | { type: "error"; message: string };
 
 export interface Deck { main: number[]; extra: number[]; side: number[]; }
@@ -133,3 +135,19 @@ export interface Format {
 export interface DeckValidation { ok: boolean; errors: string[]; format: FormatId; }
 // HTTP: GET /api/formats -> Format[]; GET /api/banlist/:format -> Record<code, 0|1|2>;
 //       POST /api/decks/validate { deck, format } -> DeckValidation
+
+// ---- Coding-agent opponents (Claude Code / Codex) ----
+// The "AI" a user duels is their own coding agent connected over MCP, either
+// launched locally by the server or connected manually with a one-line command.
+export type AgentKind = "claude" | "codex" | "bot";
+export type AgentStatus = "launching" | "connected" | "thinking" | "idle" | "error" | "exited";
+// HTTP:
+//   GET  /api/agents -> { agent: AgentKind; installed: boolean; launchable: boolean; connectCommand: string }[]
+//   POST /api/agents/launch { roomId, agent, seat? } -> { ok, pid?, error? }   (localhost + YGOSIM_ALLOW_AGENT_LAUNCH only)
+//   POST /api/agents/stop { roomId, seat }
+// create_room may set `opponent` to reserve the other seat for an agent:
+export interface OpponentSpec { kind: AgentKind; level?: "easy" | "normal" | "hard"; launch?: boolean; }
+//   ClientMsg create_room gains: opponent?: OpponentSpec; spectateOnly?: boolean (both seats agents/bots, creator watches)
+// Card browser:
+//   GET  /api/cards?q=&kind=monster|spell|trap&attribute=&race=&level=&sort=name|atk|level&offset=&limit= -> { total, cards: CardData[] }
+//   POST /api/cards/resolve { names: string[] } -> { codes: (number|null)[] }   (deck import from text lists)
