@@ -3,7 +3,7 @@ import type { CardRef, DuelEvent, PlayerIdx, Prompt, PromptOption, StepResult } 
 import { describe, expect, it } from "vitest";
 import { createDuel, loadCardDb, parseYdk } from "../src/index.js";
 
-const deckText = (name: string) => readFileSync(new URL(`../decks/${name}`, import.meta.url), "utf8");
+const deckText = (name: string) => readFileSync(new URL(`./fixtures/${name}`, import.meta.url), "utf8");
 const decks = () => [parseYdk(deckText("vanilla-dragons.ydk")), parseYdk(deckText("vanilla-sea.ydk"))] as const;
 
 function rng(seed: number) {

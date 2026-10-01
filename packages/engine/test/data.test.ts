@@ -1,9 +1,10 @@
-import { existsSync, mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlCardDb, type RawCard, loadCardDb } from "../src/carddb.js";
 import { cdbFiles, dataDir, loadStrings, makeScriptReader } from "../src/data.js";
+import { validateDeck } from "../src/formats.js";
 import { parseYdk } from "../src/ydk.js";
 
 const originalData = process.env.YGOSIM_DATA;
@@ -65,10 +66,22 @@ describe("data and deck loading", () => {
     expect(() => parseYdk("#main\n89631139\n#wat\n")).toThrow(/unknown directive/);
   });
 
-  it("exposes the checked-in sample decks with real card ids", () => {
-    for (const name of ["vanilla-dragons.ydk", "vanilla-sea.ydk"]) {
-      const path = join(new URL("../decks/", import.meta.url).pathname, name);
-      expect(existsSync(path)).toBe(true);
-    }
+  it.each([
+    ["blue-eyes-fusion", "Fusion", 23995346],
+    ["junk-synchro", "Synchro", 44508094],
+    ["utopia-xyz", "Xyz", 84013237],
+    ["link-code-talker", "Link", 1861629],
+  ] as const)("loads %s as a 40-card sample with a %s showcase", async (name, type, boss) => {
+    const db = await loadCardDb();
+    const deck = parseYdk(readFileSync(new URL(`../decks/${name}.ydk`, import.meta.url), "utf8"));
+    expect(deck.main).toHaveLength(40);
+    expect(deck.extra.length).toBeGreaterThan(0);
+    expect(deck.extra.length).toBeLessThanOrEqual(15);
+    expect(deck.side).toEqual([]);
+    expect(deck.extra).toContain(boss);
+    expect(deck.extra.every(code => db.get(code)?.type.includes(type))).toBe(true);
+    expect(validateDeck(deck, "unlimited", db)).toEqual({ ok: true, errors: [], format: "unlimited" });
+    // The loader also includes prerelease cards: sample decks must be TCG releases.
+    for (const code of [...deck.main, ...deck.extra]) expect(db.raw.get(code)!.ot & 2, `${code} is not TCG released`).not.toBe(0);
   });
 });

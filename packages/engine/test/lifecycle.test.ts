@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { createDuel, parseYdk } from "../src/index.js";
-const deck = () => parseYdk(readFileSync(new URL("../decks/vanilla-dragons.ydk", import.meta.url), "utf8"));
+const deck = () => parseYdk(readFileSync(new URL("./fixtures/vanilla-dragons.ydk", import.meta.url), "utf8"));
 describe("duel lifecycle", () => {
   it("validates deck and creation settings before starting the core", async () => {
     const d = deck();

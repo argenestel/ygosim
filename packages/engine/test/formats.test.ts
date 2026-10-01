@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Deck } from "@ygosim/protocol";
@@ -26,7 +26,7 @@ const source = dataDir();
 const originalData = process.env.YGOSIM_DATA;
 let root: string;
 let db: SqlCardDb;
-const fixture = (name = "vanilla-dragons") => parseYdk(readFileSync(new URL(`../decks/${name}.ydk`, import.meta.url), "utf8"));
+const fixture = (name = "vanilla-dragons") => parseYdk(readFileSync(new URL(`./fixtures/${name}.ydk`, import.meta.url), "utf8"));
 const withCards = (...cards: number[]): Deck => {
   const deck = fixture();
   deck.main.splice(0, cards.length, ...cards);
@@ -96,7 +96,7 @@ describe("format registry and cached LFLists parsing", () => {
 });
 
 describe("deck validation", () => {
-  it.each(["tcg", "ocg", "traditional", "unlimited", "goat", "edison"])("accepts both sample decks under %s with fixture lists", format => {
+  it.each(["tcg", "ocg", "traditional", "unlimited", "goat", "edison"])("accepts both vanilla fixtures under %s with fixture lists", format => {
     for (const name of ["vanilla-dragons", "vanilla-sea"]) expect(validateDeck(fixture(name), format, db)).toEqual({ ok: true, errors: [], format });
   });
 
@@ -272,6 +272,17 @@ describe.skipIf(!existsSync(join(source, "LFLists")))("real LFLists from Project
     }
   });
 
+  it("validates all shipped sample decks against the real TCG ban list", () => {
+    const deckNames = readdirSync(new URL("../decks/", import.meta.url)).filter(name => name.endsWith(".ydk"));
+    expect(deckNames.sort()).toEqual(["blue-eyes-fusion.ydk", "junk-synchro.ydk", "link-code-talker.ydk", "utopia-xyz.ydk"]);
+    expect(getBanlist("tcg")).toBeInstanceOf(Map);
+    for (const name of deckNames) {
+      const deck = parseYdk(readFileSync(new URL(`../decks/${name}`, import.meta.url), "utf8"));
+      const validation = validateDeck(deck, "tcg", db);
+      expect(validation.ok, `${name} fails TCG validation: ${validation.errors.join("; ")}`).toBe(true);
+    }
+  });
+
   it("forbids Pot of Greed (55144522) in TCG", () => {
     expect(getBanlist("tcg")?.get(55144522)).toBe(0);
   });
@@ -279,8 +290,8 @@ describe.skipIf(!existsSync(join(source, "LFLists")))("real LFLists from Project
   it.each(["vanilla-dragons", "vanilla-sea"])("validates a TCG-legal variant of %s under the real ban list", name => {
     const deck = fixture(name);
     expect(validateDeck(deck, "tcg", db).errors).toEqual(["Monster Reborn exceeds limit 1 (2 in deck)"]);
-    // The shipped fixtures predate format validation and contain two Reborns.
-    // Replace one with an unrestricted main-deck monster without editing decks.
+    // The vanilla fixtures predate format validation and contain two Reborns.
+    // Replace one with an unrestricted main-deck monster without editing fixtures.
     deck.main[deck.main.indexOf(83764718)] = 89631139;
     expect(validateDeck(deck, "tcg", db)).toEqual({ ok: true, errors: [], format: "tcg" });
   });
