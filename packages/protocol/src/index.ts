@@ -88,3 +88,26 @@ export type ServerMsg =
   | { type: "error"; message: string };
 
 export interface Deck { main: number[]; extra: number[]; side: number[]; }
+
+// ---- Engine interface (implemented by @ygosim/engine, consumed by server) ----
+export interface DuelOptions { decks: [Deck, Deck]; seed?: number; startingLp?: number; masterRule?: number; }
+export interface StepResult {
+  events: DuelEvent[];
+  pending?: { player: PlayerIdx; prompt: Prompt };   // undefined only when duel ended
+  ended?: { winner: PlayerIdx | null; reason: string };
+}
+export interface Duel {
+  /** Advance the core until it needs a player decision or ends. */
+  step(): Promise<StepResult>;
+  /** Answer the current pending prompt. Throws on invalid action. */
+  respond(player: PlayerIdx, action: Action): void;
+  /** Redacted snapshot for a viewer (hidden info removed). */
+  stateFor(viewer: PlayerIdx): DuelState;
+  /** Events are emitted unredacted; server must call this per viewer. */
+  redactEvents(events: DuelEvent[], viewer: PlayerIdx): DuelEvent[];
+  destroy(): void;
+}
+export interface CardDb {
+  get(code: number): CardData | undefined;
+  search(q: { name?: string; type?: string; limit?: number }): CardData[];
+}
