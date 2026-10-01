@@ -3,7 +3,16 @@ import type { Deck, ServerMsg } from "@ygosim/protocol";
 import { Room } from "../src/room.js";
 import { MockDuel } from "../src/mock.js";
 
-const sampleDeck: Deck = { main: Array(40).fill(123), extra: [], side: [] };
+// Create a valid deck: 40 cards with different codes
+const createValidDeck = (): Deck => {
+  const main: number[] = [];
+  for (let i = 0; i < 40; i++) {
+    main.push(1000000 + i); // Use unique codes
+  }
+  return { main, extra: [], side: [] };
+};
+
+const sampleDeck = createValidDeck();
 
 describe("Room Flow", () => {
   let messages: ServerMsg[] = [];

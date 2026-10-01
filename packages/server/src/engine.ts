@@ -1,9 +1,12 @@
-import type { CardDb, Deck, Duel, DuelOptions } from "@ygosim/protocol";
+import type { CardDb, Deck, Duel, DuelOptions, Format, FormatId } from "@ygosim/protocol";
 
 export interface EngineApi {
   createDuel(opts: DuelOptions): Promise<Duel>;
   loadCardDb(): Promise<CardDb>;
   parseYdk(text: string): Deck;
+  listFormats(): Promise<Format[]>;
+  getBanlist(format: FormatId): Promise<Record<number, 0 | 1 | 2> | null>;
+  validateDeck(deck: Deck, format: FormatId): Promise<{ ok: boolean; errors: string[] }>;
 }
 
 /** Local fallback .ydk parser (same format as YGOPro). */
@@ -20,6 +23,21 @@ export function parseYdkLocal(text: string): Deck {
   }
   return deck;
 }
+
+/** Default formats for fallback. */
+export const defaultFormats: Format[] = [
+  {
+    id: "tcg",
+    name: "TCG",
+    description: "Advanced Format (TCG)",
+    banlist: "2024.04 TCG",
+    masterRule: 5,
+    startingLp: 8000,
+    startingHand: 5,
+    drawPerTurn: 1,
+    deck: { mainMin: 40, mainMax: 60, extraMax: 15, sideMax: 15 },
+  },
+];
 
 let cached: Promise<EngineApi | null> | undefined;
 /** Lazily imports @ygosim/engine; resolves null if it is not available yet. */
