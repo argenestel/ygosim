@@ -186,7 +186,8 @@ export async function listAgents(): Promise<AgentInfo[]> {
     if (isMock) throw new Error();
     const r = await fetch(`/api/agents`);
     if (!r.ok) throw new Error();
-    return await r.json();
+    const j: any[] = await r.json();
+    return j.map((x) => ({ ...x, agent: x.agent ?? x.kind })).filter((x) => x.agent === "claude" || x.agent === "codex");
   } catch {
     return [
       { agent: "claude", installed: false, launchable: false, connectCommand: "claude mcp add ygosim -- node <repo>/packages/mcp/dist/index.js" },
