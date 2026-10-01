@@ -21,7 +21,6 @@ export function buildApi(
   lobby: Lobby,
   getDb: () => CardDb | null,
   getEngine: () => EngineApi | null,
-  getDbReady: () => Promise<CardDb | null>,
   parse = parseYdkLocal
 ) {
   const app = new Hono();
@@ -29,15 +28,15 @@ export function buildApi(
 
   app.get("/api/health", (c) => c.json({ ok: true, db: !!getDb() }));
 
-  app.get("/api/cards/:code", async (c) => {
-    const db = getDb() ?? await getDbReady();
+  app.get("/api/cards/:code", (c) => {
+    const db = getDb();
     if (!db) return c.json({ error: "card db not loaded" }, 503);
     const card = db.get(Number(c.req.param("code")));
     return card ? c.json(card) : c.json({ error: "not found" }, 404);
   });
 
-  app.get("/api/cards", async (c) => {
-    const db = getDb() ?? await getDbReady();
+  app.get("/api/cards", (c) => {
+    const db = getDb();
     if (!db) return c.json({ error: "card db not loaded" }, 503);
     const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
     return c.json(db.search({ name: c.req.query("q") ?? undefined, type: c.req.query("type") ?? undefined, limit }));
@@ -114,19 +113,10 @@ export function buildApi(
     const engine = getEngine();
     if (engine) {
       try {
-        // Wait for database to be ready before validating
-        const db = getDb() ?? await Promise.race([
-          getDbReady(),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error("database load timeout")), 10000)),
-        ]);
-        if (!db) {
-          return c.json({ ok: false, errors: ["card database unavailable"], format }, 503);
-        }
-        const result = await engine.validateDeck(deck as any, format, db);
+        const result = await engine.validateDeck(deck as any, format);
         return c.json({ ...result, deck, format });
       } catch (e) {
         console.warn("[api] engine validateDeck failed:", e);
-        return c.json({ ok: false, errors: [`validation error: ${(e as Error).message}`], format }, 503);
       }
     }
     return c.json({ ...validateDeck(deck, getDb()), deck, format });
@@ -139,37 +129,20 @@ export async function startServer(opts: ServerOptions = {}) {
   const port = opts.port ?? Number(process.env.PORT ?? 7777);
   const engine = opts.engine !== undefined ? opts.engine : await loadEngine();
   let db: CardDb | null = opts.db ?? null;
-
-  // Keep the database loading promise so we can await it when needed
-  let dbReady: Promise<CardDb | null>;
-  if (!db && engine) {
-    dbReady = engine.loadCardDb().catch((e) => {
-      console.warn("[server] card db failed:", e);
-      return null;
-    }).then((d) => {
-      db = d;
-      return d;
-    });
-  } else {
-    dbReady = Promise.resolve(db);
-  }
-
+  if (!db && engine) engine.loadCardDb().then((d) => (db = d), (e) => console.warn("[server] card db failed:", e));
   const createDuel: CreateDuel = opts.createDuel ?? (async (o) => {
     if (!engine) throw new Error("engine not available");
     return engine.createDuel(o);
   });
   const parse = engine?.parseYdk ?? parseYdkLocal;
-  const getDb = () => db;
-  const getEngine = () => engine;
-  const getDbReady = () => dbReady;
-
   const lobby = new Lobby(createDuel, {
     turnTimeoutMs: opts.turnTimeoutMs ?? Number(process.env.TURN_TIMEOUT_MS ?? 180_000),
     botDelayMs: opts.botDelayMs ?? Number(process.env.BOT_DELAY_MS ?? 300),
     maxInvalid: opts.maxInvalid,
-  }, undefined, getEngine, getDbReady);
-
-  const app = buildApi(lobby, getDb, getEngine, getDbReady, parse);
+  });
+  const getDb = () => db;
+  const getEngine = () => engine;
+  const app = buildApi(lobby, getDb, getEngine, parse);
 
   // Ensure image cache directory exists
   await ensureImgDir().catch((e) => console.warn("[server] failed to create image cache dir:", e));
@@ -186,7 +159,7 @@ export async function startServer(opts: ServerOptions = {}) {
     ws.on("message", (data) => {
       let msg: unknown;
       try { msg = JSON.parse(String(data)); } catch { return send({ type: "error", message: "invalid JSON" }); }
-      try { void lobby.handle(session, msg).catch((e) => send({ type: "error", message: (e as Error).message })); } catch (e) { send({ type: "error", message: (e as Error).message }); }
+      try { lobby.handle(session, msg); } catch (e) { send({ type: "error", message: (e as Error).message }); }
     });
     ws.on("close", () => lobby.disconnect(session));
   });
