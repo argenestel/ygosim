@@ -1,0 +1,31 @@
+{
+  "name": "@ygosim/mcp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "MCP server + JSON-lines CLI letting coding agents duel on ygosim",
+  "bin": {
+    "ygosim-mcp": "dist/index.js",
+    "ygosim-agent": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node scripts/shims.mjs",
+    "test": "vitest run",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@ygosim/protocol": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.0",
+    "vitest": "^2.1.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}
