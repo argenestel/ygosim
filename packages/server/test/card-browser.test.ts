@@ -156,3 +156,19 @@ describe("Card Browser HTTP pagination", () => {
     expect(filtered.cards).toEqual(cards.filter(card => card.attribute === "LIGHT").slice(200, 300));
   });
 });
+
+it("HTTP query searches effect text and case-insensitive name substrings with a 40-card limit", async () => {
+  const { buildApi } = await import("../src/server.js");
+  const { Lobby } = await import("../src/lobby.js");
+  const cards: CardData[] = Array.from({ length: 45 }, (_, i) => ({ code: i + 1, name: `HERO Fighter ${i}`, desc: "Draw two cards.", type: ["Monster"], imageUrl: "" }));
+  const db: CardDb = { get: code => cards.find(c => c.code === code), search: () => [...cards] };
+  const app = buildApi(new Lobby(async () => { throw new Error("unused"); }), () => db, () => null, async () => db);
+  for (const q of ["hero", "draw two cards"]) {
+    const body = await (await app.request(`/api/cards?q=${encodeURIComponent(q)}&limit=40`)).json();
+    expect(body.total).toBe(45);
+    expect(body.cards).toHaveLength(40);
+  }
+  const body = await (await app.request("/api/cards?q=fighter%201&limit=40")).json();
+  expect(body.total).toBe(11);
+  expect(body.cards.every((c: CardData) => c.name.toLowerCase().includes("fighter 1"))).toBe(true);
+});

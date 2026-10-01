@@ -1,5 +1,4 @@
 import { execSync, spawn, type ChildProcess } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import type { AgentKind, AgentStatus } from "@ygosim/protocol";
 
 export interface AgentInfo {
@@ -38,7 +37,7 @@ export function getAgentInfo(mcpPath: string, port = Number(process.env.PORT ?? 
       agent,
       installed,
       launchable: installed && process.env.YGOSIM_ALLOW_AGENT_LAUNCH === "1",
-      connectCommand: `${agent} mcp add ygosim ${envFlag} YGOSIM_URL=ws://localhost:${port} -- node ${pathArg}`,
+      connectCommand: `${agent} mcp add ygosim ${agent === "codex" ? `-c 'mcp_servers.ygosim.default_tools_approval_mode="approve"' -c mcp_servers.ygosim.tool_timeout_sec=660 ` : ""}${envFlag} YGOSIM_URL=ws://localhost:${port} -- node ${pathArg}`,
     };
   });
 }
@@ -88,10 +87,11 @@ export async function launchAgent(
       child = spawn("codex", [
         "exec",
         "--skip-git-repo-check",
-        `-c`,
-        `mcp_servers.ygosim.command="node"`,
-        `mcp_servers.ygosim.args='["${mpcPath}"]'`,
-        `-p`,
+        "-s", "read-only",
+        "-c", 'mcp_servers.ygosim.command="node"',
+        "-c", `mcp_servers.ygosim.args=${JSON.stringify([mpcPath])}`,
+        "-c", 'mcp_servers.ygosim.default_tools_approval_mode="approve"',
+        "-c", "mcp_servers.ygosim.tool_timeout_sec=660",
         prompt,
       ]);
     } else {

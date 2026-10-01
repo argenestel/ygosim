@@ -146,9 +146,19 @@ export class Session {
       },
       {
         name: "card_info",
-        description: "Look up a card's full text and stats by passcode or (partial) name.",
-        shape: { code: z.number().int().positive().optional(), name: z.string().min(1).optional() },
+        description: "Look up full card text by code or partial name (up to 5). Use query for archetype/name-substring or effect-text search with up to 40 compact deck-building results and TCG status.",
+        shape: { code: z.number().int().positive().optional(), name: z.string().min(1).optional(), query: z.string().min(1).optional(), limit: z.number().int().min(1).max(40).optional() },
         run: async (a) => {
+          if (a.query && a.code === undefined && !a.name) {
+            const limit = a.limit ?? 40;
+            const [list, banlist] = await Promise.all([this.cards.search(a.query, limit), this.cards.tcgBanlist()]);
+            if (!list.length) return "No card found.";
+            return list.slice(0, limit).map(d => {
+              const stats = [d.level !== undefined ? `Level/Rank ${d.level}` : "", d.atk !== undefined ? `ATK ${d.atk}` : ""].filter(Boolean).join(" / ");
+              const status = banlist ? (["Forbidden", "Limited", "Semi-Limited"][banlist[d.code]] ?? "Unlimited") : "unknown";
+              return `${d.code} | ${d.name.replace(/\s+/g, " ")} | ${d.type.join("/")}${stats ? ` | ${stats}` : ""} | TCG ${status}`;
+            }).join("\n");
+          }
           if (a.code === undefined && !a.name) throw new Error("provide a card code or name");
           const list = a.code !== undefined ? [await this.cards.get(a.code)].filter((x) => !!x) : a.name ? (await this.cards.search(a.name)).slice(0, 5) : [];
           if (!list.length) return "No card found.";

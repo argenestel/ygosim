@@ -24,12 +24,20 @@ export class CardCache {
     await Promise.all(todo.map((c) => this.get(c).catch(() => undefined)));
   }
 
-  async search(q: string): Promise<CardData[]> {
-    const r = await fetch(`${this.httpBase}/api/cards?q=${encodeURIComponent(q)}`, { signal: AbortSignal.timeout(5000) });
+  async search(q: string, limit?: number): Promise<CardData[]> {
+    const r = await fetch(`${this.httpBase}/api/cards?q=${encodeURIComponent(q)}${limit === undefined ? "" : `&limit=${limit}`}`, { signal: AbortSignal.timeout(5000) });
     if (!r.ok) throw new Error(`card search failed: HTTP ${r.status}`);
     const j = (await r.json()) as CardData[] | { cards: CardData[] };
     const list = Array.isArray(j) ? j : j.cards ?? [];
     for (const c of list) this.cache.set(c.code, c);
     return list;
+  }
+
+  async tcgBanlist(): Promise<Record<number, 0 | 1 | 2> | undefined> {
+    try {
+      const r = await fetch(`${this.httpBase}/api/banlist/tcg`, { signal: AbortSignal.timeout(5000) });
+      if (!r.ok) return undefined;
+      return await r.json() as Record<number, 0 | 1 | 2>;
+    } catch { return undefined; }
   }
 }

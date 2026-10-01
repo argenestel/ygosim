@@ -1,5 +1,6 @@
 import type { Action, Deck, Duel, DuelOptions, FormatId, MatchType, PlayerIdx, Prompt, ServerMsg } from "@ygosim/protocol";
 import { defaultAction, isLegal, legalize, type Bot } from "./ai/index.js";
+import { spectatorEvents, spectatorState } from "./spectator.js";
 
 /** Anything that can sit in a seat: a socket client (send) or a bot. */
 export interface Participant {
@@ -322,7 +323,7 @@ export class Room {
       if (p && !p.bot) safeSend(p, { type: "events", events: duel.redactEvents(events, idx), state: duel.stateFor(idx) });
     }
     if (this.spectators.size) {
-      const msg: ServerMsg = { type: "events", events: duel.redactEvents(events, 0), state: duel.stateFor(0) };
+      const msg: ServerMsg = { type: "events", events: spectatorEvents(duel, events), state: spectatorState(duel) };
       for (const s of this.spectators) safeSend(s, msg);
     }
   }
@@ -337,7 +338,7 @@ export class Room {
         const p = this.seats[idx];
         if (p && !p.bot) safeSend(p, { type: "events", events: ev, state: this.duel.stateFor(idx) });
       }
-      for (const s of this.spectators) safeSend(s, { type: "events", events: ev, state: this.duel.stateFor(0) });
+      for (const s of this.spectators) safeSend(s, { type: "events", events: ev, state: spectatorState(this.duel) });
     }
     if (this.status === "done") this.broadcastRoom();
   }

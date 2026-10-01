@@ -14,12 +14,14 @@ const prompt: Prompt = { promptId: "prompt1", kind: "idle", text: "Choose an act
 const deck = { main: [card.code], extra: [], side: [] };
 
 let http: Server, wss: WebSocketServer, peer: WebSocket, session: Session;
+let searchCards: CardData[], banlistAvailable: boolean;
 let messages: ClientMsg[], requests: string[], autoPrompt: boolean, rejection: boolean, httpStatus: number;
 function send(msg: ServerMsg) { peer.send(JSON.stringify(msg)); }
 function call(tool: string, args: object = {}) { return handleLine(session, JSON.stringify({ id: 1, tool, args })) as Promise<{ id: number; ok: boolean; text?: string; error?: string }>; }
 async function flush() { await new Promise((resolve) => setTimeout(resolve, 20)); }
 
 beforeEach(async () => {
+  searchCards = [card]; banlistAvailable = true;
   messages = []; requests = []; autoPrompt = true; rejection = false; httpStatus = 200;
   http = createServer((req, res) => {
     requests.push(req.url!);
@@ -28,7 +30,16 @@ beforeEach(async () => {
     if (httpStatus !== 200) return res.end(JSON.stringify({ error: "unavailable" }));
     if (req.url === "/api/rooms") return res.end(JSON.stringify([{ roomId: "room1", players: [{ name: "Yugi", kind: "human" }], status: "waiting", open: true }]));
     if (req.url === "/api/decks") return res.end(JSON.stringify([{ name: "Dragon Starter", deck }]));
-    if (req.url?.startsWith("/api/cards?q=")) return res.end(JSON.stringify([card]));
+    if (req.url?.startsWith("/api/cards?q=")) {
+      const params = new URL(req.url, "http://localhost").searchParams;
+      const q = params.get("q")!.toLowerCase();
+      const matches = searchCards.filter(c => c.name.toLowerCase().includes(q) || c.desc.toLowerCase().includes(q));
+      return res.end(JSON.stringify({ cards: matches.slice(0, Number(params.get("limit") ?? 50)), total: matches.length }));
+    }
+    if (req.url === "/api/banlist/tcg") {
+      if (!banlistAvailable) { res.statusCode = 503; return res.end("{}"); }
+      return res.end(JSON.stringify({ 1: 0, 2: 1, 3: 2 }));
+    }
     if (req.url === `/api/cards/${card.code}`) return res.end(JSON.stringify(card));
     res.statusCode = 404; res.end("{}");
   });
@@ -206,4 +217,48 @@ it("uses the default WS URL and derives secure WS and HTTP URLs", () => {
 });
 it("parses YDK comments and sections", () => {
   expect(parseYdk("#created by agent\n#main\n1\n#extra\n2\n!side\n3")).toEqual({ main: [1], extra: [2], side: [3] });
+});
+
+describe("card_info deck-building query", () => {
+  beforeEach(() => {
+    searchCards = Array.from({ length: 45 }, (_, i) => ({ ...card, code: i + 1, name: `HERO Fighter ${i}`, desc: "Draw two cards when summoned." }));
+  });
+  it("returns 40 compact archetype matches with all TCG statuses", async () => {
+    const result = await call("card_info", { query: "HERO" });
+    expect(result.ok).toBe(true);
+    expect(result.text!.split("\n")).toHaveLength(40);
+    expect(result.text).toContain("1 | HERO Fighter 0 | Monster/Normal | Level/Rank 8 / ATK 3000 | TCG Forbidden");
+    expect(result.text).toContain("TCG Limited");
+    expect(result.text).toContain("TCG Semi-Limited");
+    expect(result.text).toContain("TCG Unlimited");
+    expect(result.text).not.toContain("Draw two cards");
+    expect(requests).toContain("/api/cards?q=HERO&limit=40");
+  });
+  it("searches a name substring with a smaller limit", async () => {
+    const result = await call("card_info", { query: "fighter 1", limit: 3 });
+    expect(result.text!.split("\n")).toHaveLength(3);
+    expect(result.text).toContain("HERO Fighter 1 |");
+    expect(requests).toContain("/api/cards?q=fighter%201&limit=3");
+  });
+  it("searches effect text and tolerates an unavailable banlist", async () => {
+    banlistAvailable = false;
+    const result = await call("card_info", { query: "draw two cards" });
+    expect(result.ok).toBe(true);
+    expect(result.text!.split("\n")).toHaveLength(40);
+    expect(result.text).toContain("TCG unknown");
+    expect(requests).toContain("/api/cards?q=draw%20two%20cards&limit=40");
+  });
+  it("keeps name lookups at five full-text results and passcodes unchanged", async () => {
+    const result = await call("card_info", { name: "HERO" });
+    expect(result.text!.split("\n\n")).toHaveLength(5);
+    expect(result.text).toContain("Draw two cards when summoned.");
+    expect(requests).toEqual(["/api/cards?q=HERO"]);
+    const exact = await call("card_info", { code: card.code });
+    expect(exact.text).toContain(card.desc);
+    expect(exact.text).toContain("ATK 3000 / DEF 2500");
+  });
+  it("rejects out-of-range limits and reports no matches", async () => {
+    for (const limit of [0, 41, 1.5]) expect((await call("card_info", { query: "HERO", limit })).ok).toBe(false);
+    expect((await call("card_info", { query: "nonexistent" })).text).toBe("No card found.");
+  });
 });

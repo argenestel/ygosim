@@ -53,7 +53,9 @@ export function buildApi(
     const offset = Math.max(Math.floor(Number(c.req.query("offset") ?? 0)) || 0, 0);
 
     // Search for cards
-    let cards = db.search({ name: query, type: kind, limit: Number.MAX_SAFE_INTEGER });
+    const needle = query.toLowerCase();
+    let cards = db.search({ type: kind, limit: Number.MAX_SAFE_INTEGER })
+      .filter(card => card.name.toLowerCase().includes(needle) || card.desc.toLowerCase().includes(needle));
 
     // Filter by additional criteria
     cards = cards.filter(card => {
