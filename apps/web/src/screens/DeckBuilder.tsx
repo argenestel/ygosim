@@ -1,18 +1,25 @@
 import { useEffect, useRef, useState } from "react";
-import type { CardData, Deck } from "@ygosim/protocol";
-import { searchCards, validateDeck } from "../api";
-import { activeDeckName, loadDecks, parseYdk, saveDecks, setActiveDeck, toYdk } from "../deck";
+import type { CardData, Deck, Format } from "@ygosim/protocol";
+import { getBanlist, listFormats, searchCards, validateDeck } from "../api";
+import { activeDeckName, loadDecks, parseYdk, prefFormat, saveDecks, setActiveDeck, setPrefFormat, toYdk } from "../deck";
 import { CardFace } from "../duel/CardView";
 import { Inspector, useCardData } from "../duel/Inspector";
 
 const EXTRA_TYPES = ["Fusion", "Synchro", "Xyz", "Link"];
 const isExtra = (c?: CardData) => !!c && c.type.some((t) => EXTRA_TYPES.includes(t));
 
-function Slot({ code, onRemove, onHover }: { code: number; onRemove: () => void; onHover: (c: number) => void }) {
+const LIMIT_LABEL = ["Forbidden", "Limited", "Semi-Limited"] as const;
+function Ban({ limit }: { limit?: 0 | 1 | 2 }) {
+  if (limit === undefined) return null;
+  return <i className={`ban ban-${limit}`} title={LIMIT_LABEL[limit]}>{limit === 0 ? "✕" : limit}</i>;
+}
+
+function Slot({ code, limit, onRemove, onHover }: { code: number; limit?: 0 | 1 | 2; onRemove: () => void; onHover: (c: number) => void }) {
   useCardData(code);
   return (
     <button className="db-card" onClick={onRemove} onContextMenu={(e) => { e.preventDefault(); onRemove(); }} onMouseEnter={() => onHover(code)} title="Click to remove">
       <CardFace code={code} />
+      <Ban limit={limit} />
     </button>
   );
 }
@@ -26,6 +33,19 @@ export function DeckBuilder({ onBack }: { onBack: () => void }) {
   const [hover, setHover] = useState<number | undefined>();
   const [issues, setIssues] = useState<string[] | null>(null);
   const file = useRef<HTMLInputElement>(null);
+  const [formats, setFormats] = useState<Format[]>([]);
+  const [format, setFormat] = useState(prefFormat());
+  const [ban, setBan] = useState<Record<number, 0 | 1 | 2>>({});
+  useEffect(() => { listFormats().then(setFormats); }, []);
+  useEffect(() => { setPrefFormat(format); getBanlist(format).then(setBan); setIssues(null); }, [format]);
+  const fmt = formats.find((f) => f.id === format);
+  const whitelist = !!fmt?.whitelist;
+  // Whitelist formats (Goat/Edison): unlisted cards are illegal. Traditional: forbidden counts as limited.
+  const limitOf = (code: number): 0 | 1 | 2 | 3 => {
+    const l = ban[code];
+    if (l === undefined) return whitelist && Object.keys(ban).length ? 0 : 3;
+    return fmt?.traditional && l === 0 ? 1 : l;
+  };
 
   useEffect(() => {
     const t = setTimeout(() => { if (q.trim().length >= 2) searchCards(q.trim()).then(setResults); }, 250);
@@ -34,9 +54,9 @@ export function DeckBuilder({ onBack }: { onBack: () => void }) {
 
   const count = (code: number) => [...deck.main, ...deck.extra, ...deck.side].filter((c) => c === code).length;
   const add = (c: CardData, side = false) => {
-    if (count(c.code) >= 3) return;
+    if (count(c.code) >= limitOf(c.code)) return;
     const key: keyof Deck = side ? "side" : isExtra(c) ? "extra" : "main";
-    const cap = key === "main" ? 60 : 15;
+    const cap = key === "main" ? fmt?.deck.mainMax ?? 60 : key === "extra" ? fmt?.deck.extraMax ?? 15 : fmt?.deck.sideMax ?? 15;
     if (deck[key].length >= cap) return;
     setDeck({ ...deck, [key]: [...deck[key], c.code] });
   };
@@ -62,21 +82,24 @@ export function DeckBuilder({ onBack }: { onBack: () => void }) {
         </select>
         <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Deck name" />
         <button className="primary" onClick={save}>Save</button>
-        <button onClick={() => validateDeck(deck).then((r) => setIssues(r.ok ? [] : r.errors))}>Validate</button>
+        <select value={format} onChange={(e) => setFormat(e.target.value)} title="Format">
+          {formats.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+        </select>
+        <button onClick={() => validateDeck(deck, format).then((r) => setIssues(r.ok ? [] : r.errors))}>Validate</button>
         <button onClick={() => file.current?.click()}>Import .ydk</button>
         <button onClick={exportYdk}>Export .ydk</button>
         <button className="danger" onClick={del}>Delete</button>
         <input ref={file} type="file" accept=".ydk" hidden onChange={(e) => e.target.files?.[0] && importYdk(e.target.files[0])} />
       </div>
-      {issues && <div className={`db-issues${issues.length ? "" : " ok"}`} onClick={() => setIssues(null)}>{issues.length ? issues.join(" · ") : "Deck is legal ✓"}</div>}
+      {issues && <div className={`db-issues${issues.length ? "" : " ok"}`} onClick={() => setIssues(null)}>{issues.length ? issues.join(" · ") : `Deck is legal in ${fmt?.name ?? format} ✓`}</div>}
 
       <div className="db-body">
         <Inspector code={hover} />
         <div className="db-deck">
           {(["main", "extra", "side"] as const).map((k) => (
             <section key={k}>
-              <h3>{k} <small>{deck[k].length}</small></h3>
-              <div className="db-grid">{deck[k].map((c, i) => <Slot key={`${c}-${i}`} code={c} onRemove={() => remove(k, i)} onHover={setHover} />)}</div>
+              <h3>{k} <small>{deck[k].length}{k === "main" && fmt ? ` / ${fmt.deck.mainMin}–${fmt.deck.mainMax}` : ""}</small></h3>
+              <div className="db-grid">{deck[k].map((c, i) => <Slot key={`${c}-${i}`} code={c} limit={ban[c]} onRemove={() => remove(k, i)} onHover={setHover} />)}</div>
             </section>
           ))}
         </div>
@@ -85,8 +108,8 @@ export function DeckBuilder({ onBack }: { onBack: () => void }) {
           <p className="muted">Click to add · Shift+click to side deck</p>
           <div className="db-results">
             {results.map((c) => (
-              <button key={c.code} className="db-result" onClick={(e) => add(c, e.shiftKey)} onMouseEnter={() => setHover(c.code)}>
-                <span className="thumb"><CardFace code={c.code} /></span>
+              <button key={c.code} className={`db-result${limitOf(c.code) === 0 ? " illegal" : ""}`} onClick={(e) => add(c, e.shiftKey)} onMouseEnter={() => setHover(c.code)}>
+                <span className="thumb"><CardFace code={c.code} /><Ban limit={ban[c.code]} /></span>
                 <span><b>{c.name}</b><small>{c.type.join(" ")}{c.atk !== undefined ? ` · ${c.atk}/${c.def ?? "-"}` : ""}</small></span>
                 {count(c.code) > 0 && <em>{count(c.code)}</em>}
               </button>

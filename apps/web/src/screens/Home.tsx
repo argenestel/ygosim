@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import { isMock, listPresetDecks, listRooms, type PresetDeck, type RoomInfo } from "../api";
-import { activeDeckName, loadDecks, playerName, saveDecks, setActiveDeck, setPlayerName } from "../deck";
+import type { Format, MatchType } from "@ygosim/protocol";
+import { isMock, listFormats, listPresetDecks, listRooms, type PresetDeck, type RoomInfo } from "../api";
+import { activeDeckName, loadDecks, playerName, prefFormat, saveDecks, setActiveDeck, setPlayerName, setPrefFormat } from "../deck";
 import type { DuelLaunch } from "../duel/DuelScreen";
 
 export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onDecks: () => void }) {
@@ -11,6 +12,9 @@ export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onD
   const [code, setCode] = useState("");
   const [rooms, setRooms] = useState<RoomInfo[]>([]);
   const [presets, setPresets] = useState<PresetDeck[]>([]);
+  const [formats, setFormats] = useState<Format[]>([]);
+  const [format, setFormat] = useState(prefFormat());
+  const [match, setMatch] = useState<MatchType>("single");
 
   useEffect(() => {
     let alive = true;
@@ -18,6 +22,7 @@ export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onD
     poll();
     const t = setInterval(poll, 4000);
     listPresetDecks().then((p) => alive && setPresets(p));
+    listFormats().then((f) => alive && setFormats(f));
     return () => { alive = false; clearInterval(t); };
   }, []);
 
@@ -25,7 +30,11 @@ export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onD
     const next = { ...decks, [p.name]: p.deck };
     saveDecks(next); setDecks(next); setDeckName(p.name); setActiveDeck(p.name);
   };
-  const go = (l: DuelLaunch) => { setPlayerName(name || "Duelist"); setActiveDeck(deckName); onPlay(l); };
+  const go = (l: DuelLaunch) => {
+    setPlayerName(name || "Duelist"); setActiveDeck(deckName); setPrefFormat(format);
+    onPlay(l.mode === "join" ? l : { ...l, format, match });
+  };
+  const fmt = formats.find((f) => f.id === format);
   const mcpCmd = `claude mcp add ygosim --env YGOSIM_URL=${location.protocol === "https:" ? "wss" : "ws"}://${location.hostname}:7777 -- node <repo>/packages/mcp/dist/index.js`;
 
   return (
@@ -57,6 +66,20 @@ export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onD
           </div>
         </section>
 
+        <section className="panel">
+          <h2>Rules</h2>
+          <label>Format
+            <select value={format} onChange={(e) => setFormat(e.target.value)}>
+              {formats.map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}
+            </select>
+          </label>
+          {fmt && <p className="muted fmt-desc">{fmt.description} · {fmt.startingLp} LP · {fmt.startingHand}-card hand</p>}
+          <div className="seg">
+            <button className={match === "single" ? "on" : ""} onClick={() => setMatch("single")}>Single duel</button>
+            <button className={match === "match" ? "on" : ""} onClick={() => setMatch("match")}>Match (Bo3)</button>
+          </div>
+        </section>
+
         <section className="panel feature">
           <h2>Duel the AI</h2>
           <div className="seg">
@@ -76,7 +99,7 @@ export function Home({ onPlay, onDecks }: { onPlay: (l: DuelLaunch) => void; onD
             {rooms.length === 0 && <p className="muted">No open rooms</p>}
             {rooms.map((r) => (
               <button key={r.roomId} className="room" disabled={r.status !== "waiting"} onClick={() => go({ mode: "join", roomId: r.roomId })}>
-                <b>{r.roomId}</b><span>{r.players.join(" vs ") || "—"}</span><em>{r.status}</em>
+                <b>{r.roomId}</b><span>{r.players.join(" vs ") || "—"}</span><em>{[r.format, r.match === "match" ? "Bo3" : "", r.status].filter(Boolean).join(" · ")}</em>
               </button>
             ))}
           </div>

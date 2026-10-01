@@ -41,3 +41,6 @@ export function activeDeck(): Deck { return loadDecks()[activeDeckName()] ?? MOC
 
 export function playerName(): string { try { return localStorage.getItem("ygosim.name") || "Duelist"; } catch { return "Duelist"; } }
 export function setPlayerName(n: string) { try { localStorage.setItem("ygosim.name", n); } catch {} }
+
+export function prefFormat(): string { try { return localStorage.getItem("ygosim.format") || "tcg"; } catch { return "tcg"; } }
+export function setPrefFormat(f: string) { try { localStorage.setItem("ygosim.format", f); } catch {} }

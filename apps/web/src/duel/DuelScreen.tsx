@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CardRef, Deck, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
+import type { CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
 import { isMock } from "../api";
 import { createMockConn } from "../mock";
 import { connect, type Conn } from "../net";
@@ -8,12 +8,14 @@ import { Board3D } from "../duel3d/Scene3D";
 import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
+import { SideDeck } from "./SideDeck";
 import { useDuel } from "./useDuel";
 
-export type DuelLaunch =
+export type DuelLaunch = (
   | { mode: "ai"; level: "easy" | "normal" | "hard" }
   | { mode: "create" }
-  | { mode: "join"; roomId: string };
+  | { mode: "join"; roomId: string }
+) & { format?: FormatId; match?: MatchType };
 
 const PHASES = [["draw", "DP"], ["standby", "SP"], ["main1", "M1"], ["battle", "BP"], ["main2", "M2"], ["end", "EP"]] as const;
 
@@ -57,8 +59,9 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const open = useCallback((onMsg: (m: ServerMsg) => void, onClose: (why: string) => void): Conn => {
     const c = isMock ? createMockConn(onMsg) : connect(onMsg, onClose);
     c.send({ type: "hello", name, kind: "human" });
-    if (launch.mode === "ai") c.send({ type: "create_room", vsAI: true, aiLevel: launch.level, deck });
-    else if (launch.mode === "create") c.send({ type: "create_room", deck });
+    const rules = { format: launch.format, match: launch.match };
+    if (launch.mode === "ai") c.send({ type: "create_room", vsAI: true, aiLevel: launch.level, deck, ...rules });
+    else if (launch.mode === "create") c.send({ type: "create_room", deck, ...rules });
     else c.send({ type: "join_room", roomId: launch.roomId, deck });
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -100,6 +103,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover" }] : []);
   const chainNow = state?.chain ?? [];
 
+  if (view.roomStatus === "siding") {
+    return <SideDeck deck={deck} score={view.score} game={view.game} onDone={(d) => send({ type: "side_deck", deck: d })} />;
+  }
+
   if (!state) {
     return (
       <div className="duel-wait">
@@ -120,6 +127,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       <div className="duel-top">
         <LpBar name={view.players[opp] ?? "Opponent"} lp={state.lp[opp]} mine={false} active={state.turnPlayer === opp} hits={hits(opp)} />
         <div className="phase-bar">
+          {view.match === "match" && view.score && <span className="score">G{(view.game ?? 0) + 1} · {view.score[you]}–{view.score[opp]}</span>}
           <span className="turn-no">T{state.turn}</span>
           {PHASES.map(([k, l]) => <span key={k} className={state.phase === k ? `on ${state.turnPlayer === you ? "me" : "op"}` : ""}>{l}</span>)}
         </div>
@@ -197,7 +205,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
               {view.result.winner === you ? "VICTORY" : view.result.winner === null ? "DRAW" : "DEFEAT"}
             </motion.h1>
             <p>{view.result.reason}</p>
-            <button onClick={onExit}>Return</button>
+            {view.match === "match" && view.score && <p className="score-line">Match {view.score[you]} – {view.score[opp]}</p>}
+            {view.match === "match" && view.roomStatus !== "done" ? <p className="muted">Next game starting…</p> : <button onClick={onExit}>Return</button>}
           </motion.div>
         )}
       </AnimatePresence>

@@ -296,3 +296,17 @@ footer { text-align: center; color: var(--muted); font-size: 0.75rem; margin: 28
 /* ---------- 3D board ---------- */
 .board3d { position: absolute; inset: 0; }
 .board3d canvas { display: block; }
+
+/* ---------- Formats / banlist ---------- */
+.fmt-desc { margin: -4px 0 0; }
+.db-card, .thumb { position: relative; }
+.ban { position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-style: normal; font-size: 0.7rem; font-weight: 900; color: #fff; box-shadow: 0 0 0 2px #000; }
+.ban-0 { background: #e0243f; }
+.ban-1 { background: #f08a00; }
+.ban-2 { background: #d4b400; color: #1a1400; }
+.db-result.illegal { opacity: 0.45; }
+.phase-bar .score { color: #5dffb0; font-weight: 800; font-size: 0.78rem; padding: 3px 8px; }
+.score-line { font-size: 1.3rem; font-weight: 800; color: var(--gold) !important; }
+.side-screen { height: 100%; overflow: auto; padding: 24px; max-width: 1100px; margin: 0 auto; display: flex; flex-direction: column; gap: 10px; }
+.side-screen h3 { text-transform: uppercase; letter-spacing: 0.1em; font-size: 0.85rem; color: var(--gold); margin: 8px 0; }
+.db-card.picked { box-shadow: 0 0 0 3px #5dffb0, 0 0 18px #5dffb0; }

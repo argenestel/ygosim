@@ -8,6 +8,10 @@ export interface View {
   roomId?: string;
   roomStatus?: string;
   players: string[];
+  format?: string;
+  match?: string;
+  score?: [number, number];
+  game?: number;
   state?: DuelState;          // what is currently drawn (mid-animation)
   prompt?: Prompt;            // revealed only once animations catch up
   fx: Fx[];
@@ -91,6 +95,7 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
   const speed = useRef(1);
   const fxId = useRef(1);
   const stateRef = useRef<DuelState | undefined>(undefined);
+  const gameRef = useRef<number | undefined>(undefined);
 
   const pump = useCallback(async () => {
     if (running.current) return;
@@ -126,7 +131,16 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
     const c = open(
       (m) => {
         switch (m.type) {
-          case "room": dispatch({ k: "set", patch: { roomId: m.roomId, players: m.players, roomStatus: m.status } }); break;
+          case "room": {
+            const patch: Partial<View> = { roomId: m.roomId, players: m.players, roomStatus: m.status, format: m.format, match: m.match, score: m.score, game: m.game };
+            // A new game of a match starts from a clean board.
+            if (m.status === "dueling" && m.game !== undefined && m.game !== gameRef.current) {
+              if (gameRef.current !== undefined) { queue.current = []; stateRef.current = undefined; Object.assign(patch, { state: undefined, result: undefined, prompt: undefined, fx: [] }); }
+              gameRef.current = m.game;
+            }
+            dispatch({ k: "set", patch });
+            break;
+          }
           case "events": queue.current.push({ events: m.events, state: m.state }); pump(); break;
           case "prompt": queue.current.push({ events: [], state: m.state, prompt: m.prompt }); pump(); break;
           case "chat": dispatch({ k: "chat", from: m.from, text: m.text }); break;

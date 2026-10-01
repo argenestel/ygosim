@@ -1,4 +1,4 @@
-import type { CardData, Deck } from "@ygosim/protocol";
+import type { CardData, Deck, DeckValidation, Format, FormatId } from "@ygosim/protocol";
 import { MOCK_CARDS } from "./mockCards";
 
 export const isMock = new URLSearchParams(location.search).get("mock") === "1";
@@ -62,13 +62,14 @@ export async function searchCards(q: string): Promise<CardData[]> {
   }
 }
 
-export interface RoomInfo { roomId: string; players: string[]; status: string; }
+export interface RoomInfo { roomId: string; players: string[]; status: string; format?: string; match?: string; }
 export async function listRooms(): Promise<RoomInfo[]> {
   try {
     const r = await fetch(`/api/rooms`);
     if (!r.ok) return [];
     return arr<any>(await r.json(), "rooms").map((x) => ({
-      roomId: x.roomId ?? x.id, players: x.players ?? [], status: x.status ?? "?",
+      roomId: x.roomId ?? x.id, status: x.status ?? "?", format: x.format, match: x.match,
+      players: (x.players ?? []).map((p: any) => (typeof p === "string" ? p : p?.name ?? "?")),
     }));
   } catch { return []; }
 }
@@ -84,15 +85,40 @@ export async function listPresetDecks(): Promise<PresetDeck[]> {
   } catch { return []; }
 }
 
-export async function validateDeck(deck: Deck): Promise<{ ok: boolean; errors: string[] }> {
+export async function validateDeck(deck: Deck, format: FormatId = "tcg"): Promise<DeckValidation> {
   try {
     const r = await fetch(`/api/decks/validate`, {
-      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(deck),
+      method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ deck, format }),
     });
     const j: any = await r.json().catch(() => ({}));
     const errors: string[] = j.errors ?? (j.error ? [j.error] : []);
-    return { ok: j.ok ?? j.valid ?? (r.ok && errors.length === 0), errors };
+    return { ok: j.ok ?? j.valid ?? (r.ok && errors.length === 0), errors, format };
   } catch {
-    return { ok: false, errors: ["Validation server unreachable"] };
+    return { ok: false, errors: ["Validation server unreachable"], format };
   }
+}
+
+/** Offline fallback so the UI still works in demo mode. */
+const DEFAULT_FORMATS: Format[] = [
+  { id: "tcg", name: "Advanced (TCG)", description: "Current TCG Forbidden & Limited list, Master Rule 5.", banlist: "TCG", masterRule: 5, startingLp: 8000, startingHand: 5, drawPerTurn: 1, deck: { mainMin: 40, mainMax: 60, extraMax: 15, sideMax: 15 } },
+  { id: "ocg", name: "Advanced (OCG)", description: "Current OCG list, Master Rule 5.", banlist: "OCG", masterRule: 5, startingLp: 8000, startingHand: 5, drawPerTurn: 1, deck: { mainMin: 40, mainMax: 60, extraMax: 15, sideMax: 15 } },
+  { id: "unlimited", name: "Unlimited", description: "Every card, no list.", banlist: "", masterRule: 5, startingLp: 8000, startingHand: 5, drawPerTurn: 1, deck: { mainMin: 40, mainMax: 60, extraMax: 15, sideMax: 15 } },
+];
+let formatsP: Promise<Format[]> | undefined;
+export function listFormats(): Promise<Format[]> {
+  return (formatsP ??= (isMock ? Promise.reject() : fetch(`/api/formats`).then((r) => (r.ok ? r.json() : Promise.reject())))
+    .then((j: any) => { const l = arr<Format>(j, "formats"); return l.length ? l : DEFAULT_FORMATS; })
+    .catch(() => DEFAULT_FORMATS));
+}
+
+const banCache = new Map<string, Promise<Record<number, 0 | 1 | 2>>>();
+export function getBanlist(format: FormatId): Promise<Record<number, 0 | 1 | 2>> {
+  let p = banCache.get(format);
+  if (!p) {
+    p = (isMock ? Promise.resolve({}) : fetch(`/api/banlist/${encodeURIComponent(format)}`).then((r) => (r.ok ? r.json() : {})))
+      .then((j: any) => (j && typeof j === "object" ? (j.cards ?? j.list ?? j) : {}))
+      .catch(() => ({}));
+    banCache.set(format, p);
+  }
+  return p;
 }
