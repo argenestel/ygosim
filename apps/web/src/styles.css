@@ -292,3 +292,7 @@ footer { text-align: center; color: var(--muted); font-size: 0.75rem; margin: 28
   .lp { min-width: 150px; }
   .lp-num { font-size: 1.4rem; }
 }
+
+/* ---------- 3D board ---------- */
+.board3d { position: absolute; inset: 0; }
+.board3d canvas { display: block; }

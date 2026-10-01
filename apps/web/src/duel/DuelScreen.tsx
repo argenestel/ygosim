@@ -4,7 +4,7 @@ import type { CardRef, Deck, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/
 import { isMock } from "../api";
 import { createMockConn } from "../mock";
 import { connect, type Conn } from "../net";
-import { Board } from "./Board";
+import { Board3D } from "../duel3d/Scene3D";
 import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
@@ -131,7 +131,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
       <Inspector code={hover?.code ?? pinned} />
 
-      <Board state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
+      <Board3D state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
         onCard={onCard} onHover={setHover} onPile={(owner, loc) => setPile({ owner, loc })} />
 
       <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} />
