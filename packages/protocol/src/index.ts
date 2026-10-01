@@ -73,7 +73,7 @@ export type DuelEvent =
 // ---- WebSocket messages ----
 export type ClientMsg =
   | { type: "hello"; name: string; kind: "human" | "agent" }
-  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType; opponent?: OpponentSpec; spectateOnly?: boolean; seconds?: Deck }
+  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType; opponent?: OpponentSpec; spectateOnly?: boolean; opponentDeck?: Deck }
   | { type: "join_room"; roomId: string; deck: Deck }
   | { type: "action"; action: Action }
   | { type: "chat"; text: string }
