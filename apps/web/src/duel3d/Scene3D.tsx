@@ -1,4 +1,4 @@
-import { Line, Sparkles, Text } from "@react-three/drei";
+import { Billboard, Line, Sparkles, Text } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
 import { Suspense, useMemo, useRef } from "react";
@@ -15,7 +15,7 @@ interface Props {
   fx: Fx[];
   selectable: Set<string>;
   selected: Set<string>;
-  onCard: (c: CardRef) => void;
+  onCard: (c: CardRef, at?: { x: number; y: number }) => void;
   onPile: (owner: PlayerIdx, loc: CardRef["location"]) => void;
   onHover: (c: CardRef | null) => void;
   shake: number;
@@ -140,6 +140,31 @@ function StatPlates({ state, targets }: { state: DuelState; targets: Map<string,
   );
 }
 
+/** Floating chain numbers over each chained card, linked in chain order. */
+function ChainMarks({ state, targets }: { state: DuelState; targets: Map<string, { x: number; z: number }> }) {
+  const line = useRef<{ material: { dashOffset: number } } | null>(null);
+  useFrame((_, dt) => { if (line.current) line.current.material.dashOffset -= dt * 0.8; });
+  const pts = state.chain.map((l) => {
+    const t = targets.get(l.card.uid) ?? (() => { const s = slotWorld(l.card.location, l.card.sequence, l.card.controller === state.you); return { x: s.x, z: s.z }; })();
+    return new THREE.Vector3(t.x, 1.25, t.z);
+  });
+  if (!pts.length) return null;
+  return (
+    <group>
+      {pts.length > 1 && (
+        <Line ref={line as never} points={pts} color="#d6b15e" lineWidth={2.5} dashed dashSize={0.25} gapSize={0.12} transparent opacity={0.9} toneMapped={false} />
+      )}
+      {pts.map((p, i) => (
+        <Billboard key={i} position={p}>
+          <mesh><circleGeometry args={[0.24, 32]} /><meshBasicMaterial color="#1b1405" transparent opacity={0.92} /></mesh>
+          <mesh position={[0, 0, 0.001]}><ringGeometry args={[0.22, 0.26, 32]} /><meshBasicMaterial color="#f2d792" toneMapped={false} /></mesh>
+          <Text position={[0, 0, 0.002]} fontSize={0.26} color="#f2d792" anchorX="center" anchorY="middle" fontWeight={700}>{String(i + 1)}</Text>
+        </Billboard>
+      ))}
+    </group>
+  );
+}
+
 function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake }: Props) {
   const targets = useMemo(() => worldTargets(state.cards, state.you), [state.cards, state.you]);
   const clock = useThree((s) => s.clock);
@@ -192,13 +217,14 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
       <Sparkles count={40} scale={[14, 4, 12]} position={[0, 2, 0]} size={1.8} speed={0.2} color="#d6c39a" opacity={0.35} />
       <PileHits state={state} onPile={onPile} glowing={glowing} />
       <StatPlates state={state} targets={targets} />
+      <ChainMarks state={state} targets={targets} />
       {state.cards.map((c) => {
         const t = targets.get(c.uid);
         if (!t) return null;
         return (
           <Card3D key={c.uid} card={c} target={t} visible={!visible.has(c.uid)} mine={c.controller === state.you}
             selectable={selectable.has(c.uid) && !isPile(c.location)} selected={selected.has(c.uid)} motion={motions.get(c.uid)}
-            onClick={(card) => (isPile(card.location) ? onPile(card.controller, card.location) : onCard(card))} onHover={onHover} />
+            onClick={(card, at) => (isPile(card.location) ? onPile(card.controller, card.location) : onCard(card, at))} onHover={onHover} />
         );
       })}
       {fx.map((f) => {

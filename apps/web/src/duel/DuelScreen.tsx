@@ -10,6 +10,7 @@ import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
 import { SideDeck } from "./SideDeck";
+import { ChainCallout, ChainPanel } from "./ChainPanel";
 import { AgentWaiting } from "./AgentWaiting";
 import { useDuel } from "./useDuel";
 
@@ -81,7 +82,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
   const [hover, setHover] = useState<CardRef | null>(null);
   const [pinned, setPinned] = useState<number | undefined>();
-  const [menu, setMenu] = useState<PromptOption[] | null>(null);
+  const [menu, setMenu] = useState<{ opts: PromptOption[]; at?: { x: number; y: number } } | null>(null);
   const [pile, setPile] = useState<{ owner: PlayerIdx; loc: CardRef["location"] } | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
   const [speed, setSpd] = useState(1);
@@ -121,11 +122,11 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const submit = (ids: string[]) => { uiClick(); if (prompt) respond(prompt.promptId, ids); setMenu(null); setPile(null); };
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length < (prompt?.max ?? 1) ? [...s, id] : s));
 
-  const onCard = (c: CardRef) => {
+  const onCard = (c: CardRef, at?: { x: number; y: number }) => {
     if (c.code !== undefined) setPinned(c.code);
     const opts = byCard.get(c.uid);
     if (!prompt || !opts) return;
-    if (isBoardMenu(prompt)) { setPile(null); return setMenu(opts); }
+    if (isBoardMenu(prompt)) { setPile(null); return setMenu({ opts, at }); }
     if (isMulti(prompt)) return toggle(opts[0].id);
     submit([opts[0].id]);
   };
@@ -138,6 +139,19 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
   const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover" }] : []);
   const chainNow = state?.chain ?? [];
+  const lastActivate = (() => {
+    for (let i = fx.length - 1; i >= 0; i--) {
+      const e = fx[i].ev;
+      if (e.t === "activate") return { id: fx[i].id, n: e.chainLink, code: e.card.code, mine: e.card.controller === state?.you };
+    }
+    return undefined;
+  })();
+  // Phase bar shortcuts map to the matching global option when one is offered.
+  const phaseOption = (k: string) => {
+    if (!prompt || !isBoardMenu(prompt)) return undefined;
+    const re = k === "battle" ? /battle phase/i : k === "main2" ? /main phase 2/i : k === "end" ? /end (phase|turn)/i : null;
+    return re ? prompt.options.find((o) => !o.card && re.test(o.label)) : undefined;
+  };
 
   if (view.roomStatus === "siding") {
     return <SideDeck deck={deck} score={view.score} game={view.game} onDone={(d) => send({ type: "side_deck", deck: d })} />;
@@ -168,7 +182,12 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         <div className="phase-bar">
           {view.match === "match" && view.score && <span className="score">G{(view.game ?? 0) + 1} · {view.score[you]}–{view.score[opp]}</span>}
           <span className="turn-no">T{state.turn}</span>
-          {PHASES.map(([k, l]) => <span key={k} className={state.phase === k ? `on ${state.turnPlayer === you ? "me" : "op"}` : ""}>{l}</span>)}
+          {PHASES.map(([k, l]) => {
+            const opt = phaseOption(k);
+            return opt
+              ? <button key={k} className="phase-go" title={opt.label} onClick={() => submit([opt.id])}>{l}</button>
+              : <span key={k} className={state.phase === k ? `on ${state.turnPlayer === you ? "me" : "op"}` : ""}>{l}</span>;
+          })}
         </div>
         <div className="top-tools">
           {[1, 2, 4].map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => { setSpd(s); setSpeed(s); }}>{s}×</button>)}
@@ -186,16 +205,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
       <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} />
 
-      {chainNow.length > 0 && (
-        <div className="chain-stack">
-          <div className="chain-head">CHAIN</div>
-          {chainNow.map((c, i) => (
-            <motion.div key={i} className="chain-link" initial={{ x: 60, opacity: 0 }} animate={{ x: 0, opacity: 1 }}>
-              <b>{i + 1}</b>{c.card.code !== undefined && <span className="thumb"><CardFace code={c.card.code} /></span>}
-            </motion.div>
-          ))}
-        </div>
-      )}
+      <ChainPanel chain={chainNow} you={you} />
+      <AnimatePresence>
+        {lastActivate && <ChainCallout key={lastActivate.id} id={lastActivate.id} n={lastActivate.n} code={lastActivate.code} mine={lastActivate.mine} />}
+      </AnimatePresence>
 
       <AnimatePresence>
         {view.banner && (
@@ -211,7 +224,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       {!prompt && !view.result && view.busy && <div className="opp-thinking">…</div>}
       {!prompt && !view.result && !view.busy && <div className="opp-thinking">Opponent is thinking…</div>}
 
-      {menu && <CardMenu options={menu} onPick={(id) => submit([id])} onClose={() => setMenu(null)} />}
+      {menu && <CardMenu options={menu.opts} at={menu.at} onPick={(id) => submit([id])} onClose={() => setMenu(null)} />}
 
       {pile && (
         <div className="modal-backdrop" onClick={() => setPile(null)}>

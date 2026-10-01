@@ -21,7 +21,7 @@ interface Props {
   selectable: boolean;
   selected: boolean;
   motion?: Motion;
-  onClick: (c: CardRef) => void;
+  onClick: (c: CardRef, at: { x: number; y: number }) => void;
   onHover: (c: CardRef | null) => void;
 }
 
@@ -116,7 +116,7 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
         <meshBasicMaterial map={glowTexture()} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
       </mesh>
       <mesh geometry={geo} material={mats} castShadow receiveShadow
-        onClick={(e) => { e.stopPropagation(); onClick(card); }} onPointerOver={over} onPointerOut={out} />
+        onClick={(e) => { e.stopPropagation(); onClick(card, { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY }); }} onPointerOver={over} onPointerOut={out} />
       {card.overlays && card.overlays.length > 0 && card.overlays.map((o, i) => (
         <mesh key={o.uid} position={[-CW / 2 + 0.1 + i * 0.16, CH / 2 + 0.08, 0.02]}>
           <circleGeometry args={[0.06, 16]} /><meshBasicMaterial color="#d6a8ff" toneMapped={false} />

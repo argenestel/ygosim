@@ -57,11 +57,13 @@ export function PromptPanel({ prompt, selected, toggle, submit }: Props) {
 }
 
 /** Pop-up menu of the actions a single card offers during idle/battle. */
-export function CardMenu({ options, onPick, onClose }: { options: PromptOption[]; onPick: (id: string) => void; onClose: () => void }) {
+export function CardMenu({ options, at, onPick, onClose }: { options: PromptOption[]; at?: { x: number; y: number }; onPick: (id: string) => void; onClose: () => void }) {
+  // Pop up next to the clicked card (clamped on screen); centre as a fallback.
+  const style = at ? { position: "absolute" as const, left: Math.min(Math.max(12, at.x + 14), window.innerWidth - 300), top: Math.min(Math.max(12, at.y - 60), window.innerHeight - 60 - options.length * 46) } : undefined;
   return (
-    <div className="card-menu-backdrop" onClick={onClose}>
-      <div className="card-menu" onClick={(e) => e.stopPropagation()}>
-        {options[0]?.card?.code !== undefined && <div className="card-menu-art"><CardFace code={options[0].card!.code!} /></div>}
+    <div className={`card-menu-backdrop${at ? " anchored" : ""}`} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
+      <div className={`card-menu${at ? " compact" : ""}`} style={style} onClick={(e) => e.stopPropagation()}>
+        {!at && options[0]?.card?.code !== undefined && <div className="card-menu-art"><CardFace code={options[0].card!.code!} /></div>}
         <div className="card-menu-list">
           {options.map((o) => <button key={o.id} onClick={() => onPick(o.id)}>{o.label}</button>)}
           <button className="ghost" onClick={onClose}>Cancel</button>
