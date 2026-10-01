@@ -39,8 +39,11 @@ interface Props {
 }
 
 export const CardView = memo(function CardView({ card, pos, selectable, selected, mine, onClick, onHover, hidePile }: Props) {
-  const faceDown = card.code === undefined || card.position === "facedown" || card.position === "facedown_def";
-  const sideways = card.position === "def" || card.position === "facedown_def";
+  // Battle position only means something on the field; engines report raw positions for hand/deck too.
+  const onBoard = card.location === "mzone" || card.location === "szone" || card.location === "emzone" || card.location === "fzone" || card.location === "pzone";
+  const faceDown = card.code === undefined || (onBoard && (card.position === "facedown" || card.position === "facedown_def"))
+    || ((card.location === "deck" || card.location === "extra") && card.position !== "faceup");
+  const sideways = onBoard && (card.position === "def" || card.position === "facedown_def");
   const inHand = card.location === "hand";
   const onField = card.location === "mzone" || card.location === "emzone";
   const lift = inHand && mine ? 30 : 0;
