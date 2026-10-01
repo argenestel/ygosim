@@ -1,4 +1,4 @@
-import type { CardDb, ClientMsg, Deck, FormatId, ServerMsg } from "@ygosim/protocol";
+import type { CardDb, ClientMsg, Deck, FormatId, ServerMsg, PlayerIdx, OpponentSpec } from "@ygosim/protocol";
 import { createBot } from "./ai/index.js";
 import { Room, type CreateDuel, type Participant, type RoomOptions } from "./room.js";
 import { validateDeck } from "./decks.js";
@@ -75,9 +75,60 @@ export class Lobby {
         // Create room only after validation passes
         const room = new Room(this.createDuel, this.roomOpts, undefined, format, match);
         this.rooms.set(room.id, room);
+
+        // Handle spectateOnly mode (creator is a spectator)
+        if (msg.spectateOnly) {
+          // In spectate-only mode, the creator watches as a spectator
+          // opponentDeck is used for the agent/bot opponent
+          const opponentDeck = msg.opponentDeck ?? msg.deck;
+          const opponent = msg.opponent ?? { kind: "bot", level: "normal" };
+
+          // Set up the opponent in seat 0
+          if (opponent.kind === "bot") {
+            const bot = createBot(opponent.level ?? "normal");
+            room.join({ id: `bot-${room.id}`, name: `AI (${opponent.level ?? "normal"})`, kind: "bot", bot, send: () => {} }, opponentDeck);
+          } else {
+            // Agent seat is reserved but not yet connected
+            // We'll need to track this in the room for agent connections
+            const agent = {
+              id: `agent-${room.id}-0`,
+              name: `Agent (${opponent.kind})`,
+              kind: "agent" as const,
+              send: () => {},
+            };
+            room.join(agent, opponentDeck);
+          }
+
+          // Creator joins as spectator
+          room.spectators.add(s);
+          s.room = room;
+          room.broadcastRoom();
+          return;
+        }
+
+        // Normal mode: creator plays
         s.room = room;
         room.join(s, msg.deck);
-        if (msg.vsAI) {
+
+        // Handle opponent (agent or bot)
+        if (msg.opponent) {
+          const opponent = msg.opponent;
+          if (opponent.kind === "bot") {
+            const bot = createBot(opponent.level ?? "normal");
+            room.join({ id: `bot-${room.id}`, name: `AI (${opponent.level ?? "normal"})`, kind: "bot", bot, send: () => {} }, this.aiDeck?.() ?? msg.deck);
+          } else {
+            // Agent seat is reserved but not yet connected
+            const agent = {
+              id: `agent-${room.id}-1`,
+              name: `Agent (${opponent.kind})`,
+              kind: "agent" as const,
+              send: () => {},
+            };
+            room.join(agent, this.aiDeck?.() ?? msg.deck);
+            // If launch is requested, the server will launch it via POST /api/agents/launch
+          }
+        } else if (msg.vsAI) {
+          // Legacy vsAI field
           const level = msg.aiLevel ?? "normal";
           const bot = createBot(level);
           room.join({ id: `bot-${room.id}`, name: `AI (${level})`, kind: "bot", bot, send: () => {} }, this.aiDeck?.() ?? msg.deck);
@@ -103,6 +154,16 @@ export class Lobby {
         // Join only after validation passes
         s.room = room;
         room.join(s, msg.deck);
+        return;
+      }
+      case "spectate": {
+        if (s.room && s.room.status !== "done") return err("already in a room");
+        const room = this.rooms.get(msg.roomId);
+        if (!room) return err(`no such room ${msg.roomId}`);
+
+        s.room = room;
+        room.spectators.add(s);
+        room.broadcastRoom();
         return;
       }
       case "side_deck":

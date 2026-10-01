@@ -8,6 +8,7 @@ import { Lobby } from "./lobby.js";
 import { sampleDecks, validateDeck } from "./decks.js";
 import { loadEngine, parseYdkLocal, defaultFormats, type EngineApi } from "./engine.js";
 import { ensureImgDir, getImageBuffer } from "./image-cache.js";
+import { getAgentInfo, launchAgent, stopAgent, stopRoomAgents } from "./agents.js";
 import type { CreateDuel, RoomOptions } from "./room.js";
 
 export interface ServerOptions extends RoomOptions {
@@ -38,9 +39,45 @@ export function buildApi(
 
   app.get("/api/cards", async (c) => {
     const db = getDb() ?? await getDbReady();
-    if (!db) return c.json({ error: "card db not loaded" }, 503);
+    if (!db) return c.json({ error: "card db not loaded", total: 0, cards: [] }, 503);
+
+    const query = c.req.query("q") ?? "";
+    const kind = c.req.query("kind");
+    const attribute = c.req.query("attribute");
+    const race = c.req.query("race");
+    const level = c.req.query("level");
+    const sort = c.req.query("sort") ?? "name";
     const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
-    return c.json(db.search({ name: c.req.query("q") ?? undefined, type: c.req.query("type") ?? undefined, limit }));
+    const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
+
+    // Search for cards
+    let cards = db.search({ name: query, type: kind, limit: 200 });
+
+    // Filter by additional criteria
+    cards = cards.filter(card => {
+      if (attribute && card.attribute !== attribute) return false;
+      if (race && card.race !== race) return false;
+      if (level !== undefined) {
+        const cardLevel = Number(level);
+        if (!Number.isNaN(cardLevel) && card.level !== cardLevel) return false;
+      }
+      return true;
+    });
+
+    // Sort by requested field
+    if (sort === "atk" && cards.length > 0) {
+      cards.sort((a, b) => (b.atk ?? 0) - (a.atk ?? 0));
+    } else if (sort === "level" && cards.length > 0) {
+      cards.sort((a, b) => (b.level ?? 0) - (a.level ?? 0));
+    } else {
+      cards.sort((a, b) => a.name.localeCompare(b.name));
+    }
+
+    const total = cards.length;
+    return c.json({
+      total,
+      cards: cards.slice(offset, offset + limit)
+    });
   });
 
   app.get("/api/img/:code", async (c) => {
@@ -130,6 +167,69 @@ export function buildApi(
       }
     }
     return c.json({ ...validateDeck(deck, getDb()), deck, format });
+  });
+
+  app.get("/api/agents", (c) => {
+    try {
+      const mpcPath = new URL(import.meta.url).pathname.replace(/server\/.*/, "mcp/dist/index.js");
+      const agents = getAgentInfo(mpcPath);
+      return c.json(agents);
+    } catch (e) {
+      return c.json({ error: (e as Error).message }, 500);
+    }
+  });
+
+  app.post("/api/agents/launch", async (c) => {
+    // Check for localhost and environment flag
+    const forwarded = c.req.header("x-forwarded-for");
+    if (!process.env.YGOSIM_ALLOW_AGENT_LAUNCH) {
+      return c.json({ ok: false, error: "Agent launch disabled" }, 403);
+    }
+    try {
+      const body = await c.req.json() as any;
+      const mpcPath = new URL(import.meta.url).pathname.replace(/server\/.*/, "mcp/dist/index.js");
+      const result = await launchAgent(mpcPath, body.agent, body.roomId, body.seat ?? 1);
+      return c.json(result);
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  app.post("/api/agents/stop", async (c) => {
+    try {
+      const body = await c.req.json() as any;
+      stopAgent(body.roomId, body.seat ?? 1);
+      return c.json({ ok: true });
+    } catch (e) {
+      return c.json({ ok: false, error: (e as Error).message }, 400);
+    }
+  });
+
+  app.post("/api/cards/resolve", async (c) => {
+    const db = getDb() ?? await getDbReady();
+    if (!db) return c.json({ codes: [] }, 503);
+
+    try {
+      const body = await c.req.json() as any;
+      const names = Array.isArray(body.names) ? body.names : [];
+
+      const codes = names.map((name: string) => {
+        const exact = db.search({ name, limit: 1 });
+        if (exact.length > 0) return exact[0].code;
+
+        // Fuzzy match: search all cards and find best match
+        const allCards = db.search({ limit: 9999 });
+        const lowerName = name.toLowerCase();
+        const matches = allCards.filter(card =>
+          card.name.toLowerCase().includes(lowerName)
+        );
+        return matches.length > 0 ? matches[0].code : null;
+      });
+
+      return c.json({ codes });
+    } catch (e) {
+      return c.json({ codes: [] }, 400);
+    }
   });
 
   return app;

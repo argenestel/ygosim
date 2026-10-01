@@ -114,7 +114,7 @@ export class Room {
     }
     return msg;
   }
-  private broadcastRoom() { this.broadcast(this.roomMsg()); }
+  broadcastRoom() { this.broadcast(this.roomMsg()); }
   broadcast(msg: ServerMsg) {
     for (const p of [...this.players, ...this.spectators]) safeSend(p, msg);
   }
