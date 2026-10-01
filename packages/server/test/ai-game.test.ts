@@ -8,7 +8,7 @@ import { MockDuel } from "../src/mock.js";
 const createValidDeck = (): Deck => {
   const main: number[] = [];
   for (let i = 0; i < 40; i++) {
-    main.push(1000000 + i); // Use unique codes
+    main.push(1000000 + i);
   }
   return { main, extra: [], side: [] };
 };
@@ -34,7 +34,7 @@ describe("AI vs AI Game", () => {
       };
     };
 
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const easyBot = createParticipant("bot-easy", "Easy Bot", "easy");
     const normalBot = createParticipant("bot-normal", "Normal Bot", "normal");
 
@@ -69,7 +69,7 @@ describe("AI vs AI Game", () => {
       };
     };
 
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const normalBot = createParticipant("bot-normal", "Normal Bot", "normal");
     const hardBot = createParticipant("bot-hard", "Hard Bot", "hard");
 
@@ -87,7 +87,6 @@ describe("AI vs AI Game", () => {
     const levels: Array<"easy" | "normal" | "hard"> = ["easy", "normal", "hard"];
 
     for (const level of levels) {
-      const messages: ServerMsg[] = [];
       const bot = createBot(level);
       expect(bot.name).toBeDefined();
       expect(bot.choose).toBeDefined();

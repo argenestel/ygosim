@@ -7,7 +7,7 @@ import { MockDuel } from "../src/mock.js";
 const createValidDeck = (): Deck => {
   const main: number[] = [];
   for (let i = 0; i < 40; i++) {
-    main.push(1000000 + i); // Use unique codes
+    main.push(1000000 + i);
   }
   return { main, extra: [], side: [] };
 };
@@ -55,7 +55,7 @@ describe("Lobby", () => {
     expect(session.room?.status).toBe("waiting");
   });
 
-  it("should list active rooms", () => {
+  it("should list active rooms with player names as strings", () => {
     const messages: ServerMsg[] = [];
     const lobby = new Lobby(createMockDuel);
     const send = (msg: ServerMsg) => messages.push(msg);
@@ -66,8 +66,9 @@ describe("Lobby", () => {
 
     const rooms = lobby.list();
     expect(rooms.length).toBeGreaterThan(0);
-    const playerNames = rooms[0].players.map((p: any) => p.name);
-    expect(playerNames).toContain("Player1");
+    expect(rooms[0].players).toContain("Player1");
+    expect(Array.isArray(rooms[0].players)).toBe(true);
+    expect(typeof rooms[0].players[0]).toBe("string");
     expect(rooms[0].status).toBe("waiting");
   });
 
@@ -82,9 +83,8 @@ describe("Lobby", () => {
 
     const rooms = lobby.list();
     expect(rooms.length).toBeGreaterThan(0);
-    const playerNames = rooms[0].players.map((p: any) => p.name);
-    expect(playerNames).toContain("Player1");
-    expect(playerNames.some((p: string) => p.includes("AI"))).toBe(true);
+    expect(rooms[0].players).toContain("Player1");
+    expect(rooms[0].players.some((p: string) => p.includes("AI"))).toBe(true);
   });
 
   it("should reject invalid deck in create_room", () => {

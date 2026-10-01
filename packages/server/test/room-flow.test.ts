@@ -7,7 +7,7 @@ import { MockDuel } from "../src/mock.js";
 const createValidDeck = (): Deck => {
   const main: number[] = [];
   for (let i = 0; i < 40; i++) {
-    main.push(1000000 + i); // Use unique codes
+    main.push(1000000 + i);
   }
   return { main, extra: [], side: [] };
 };
@@ -33,7 +33,7 @@ describe("Room Flow", () => {
   });
 
   it("should broadcast room info when players join", async () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
 
@@ -51,7 +51,7 @@ describe("Room Flow", () => {
   });
 
   it("should start dueling when room is full", async () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
 
@@ -68,7 +68,7 @@ describe("Room Flow", () => {
   });
 
   it("should send events to both players redacted", async () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
 
@@ -81,7 +81,7 @@ describe("Room Flow", () => {
   });
 
   it("should handle player surrender", async () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
 
@@ -99,7 +99,7 @@ describe("Room Flow", () => {
   });
 
   it("should broadcast chat messages", () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
 
@@ -115,7 +115,7 @@ describe("Room Flow", () => {
   });
 
   it("should handle spectators joining a full room", () => {
-    const room = new Room(createMockDuel);
+    const room = new Room(createMockDuel, {}, undefined, "tcg", "single");
     const p1 = createMockParticipant("p1", "Player1");
     const p2 = createMockParticipant("p2", "Player2");
     const spec = createMockParticipant("spec", "Spectator");

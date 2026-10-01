@@ -1,4 +1,4 @@
-import type { ClientMsg, Deck, ServerMsg } from "@ygosim/protocol";
+import type { ClientMsg, Deck, FormatId, MatchType, ServerMsg } from "@ygosim/protocol";
 import { createBot } from "./ai/index.js";
 import { Room, type CreateDuel, type Participant, type RoomOptions } from "./room.js";
 import { validateDeck } from "./decks.js";
@@ -37,7 +37,9 @@ export class Lobby {
         if (s.room && s.room.status !== "done") return err("already in a room");
         const v = validateDeck(msg.deck);
         if (!v.ok) return err(`invalid deck: ${v.errors.join("; ")}`);
-        const room = new Room(this.createDuel, this.roomOpts);
+        const format = msg.format ?? "tcg";
+        const match = msg.match ?? "single";
+        const room = new Room(this.createDuel, this.roomOpts, undefined, format, match);
         this.rooms.set(room.id, room);
         s.room = room;
         room.join(s, msg.deck);
@@ -73,10 +75,24 @@ export class Lobby {
   }
 
   list() {
-    return [...this.rooms.values()].map((r) => ({
-      roomId: r.id, status: r.status, players: r.players.map((p) => ({ name: p.name, kind: p.kind })),
-      spectators: r.spectators.size, open: r.status === "waiting" && !r.isFull,
-    }));
+    return [...this.rooms.values()].map((r) => {
+      const playerNames = r.players.map((p) => p.name);
+      const result: any = {
+        roomId: r.id,
+        status: r.status,
+        players: playerNames,
+        playerKinds: r.players.map((p) => p.kind),
+        spectators: r.spectators.size,
+        open: r.status === "waiting" && !r.isFull,
+      };
+      if (r.format) result.format = r.format;
+      if (r.match) result.match = r.match;
+      if (r.match === "match") {
+        result.score = r.score;
+        result.game = r.game;
+      }
+      return result;
+    });
   }
 
   private gc() {

@@ -1,10 +1,10 @@
 import type { CardDb, Deck } from "@ygosim/protocol";
 import { readdirSync, readFileSync, existsSync } from "node:fs";
-import { join, dirname, basename } from "node:path";
+import { join, dirname, basename, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseYdkLocal } from "./engine.js";
 
-const DECK_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "decks");
+const DECK_DIR = resolve(dirname(fileURLToPath(import.meta.url)), "../../", "engine", "decks");
 
 export interface SampleDeck { id: string; name: string; deck: Deck; }
 

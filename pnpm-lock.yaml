@@ -117,6 +117,9 @@ importers:
       '@hono/node-server':
         specifier: ^1.13.7
         version: 1.19.17(hono@4.13.12)
+      '@ygosim/engine':
+        specifier: workspace:*
+        version: link:../engine
       '@ygosim/protocol':
         specifier: workspace:*
         version: link:../protocol
