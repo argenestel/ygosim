@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 import type { ClientMsg, Deck, DuelEvent, DuelState, Prompt, ServerMsg } from "@ygosim/protocol";
 
-export interface RoomInfo { roomId: string; players: string[]; status: "waiting" | "dueling" | "done" }
+export interface RoomInfo { roomId: string; players: string[]; status: Extract<ServerMsg, { type: "room" }>["status"] }
 export type WaitResult =
   | { kind: "prompt"; prompt: Prompt }
   | { kind: "ended"; winner: 0 | 1 | null; reason: string }
