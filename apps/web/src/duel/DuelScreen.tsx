@@ -5,7 +5,8 @@ import { isMock } from "../api";
 import { isMuted, setMuted, uiClick } from "../sfx";
 import { createMockConn } from "../mock";
 import { connect, type Conn } from "../net";
-import { Board3D } from "../duel3d/Scene3D";
+import { Board3D, type PlaceTarget } from "../duel3d/Scene3D";
+import { slotWorld } from "../duel3d/space";
 import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
@@ -138,6 +139,18 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   }, [prompt, state, view.busy, respond]);
 
   const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover" }] : []);
+  // select_place: map "place:<player>:<location>:<seq>" options onto board zones so they can be clicked.
+  const places: PlaceTarget[] = useMemo(() => {
+    if (!prompt || !state || prompt.kind !== "select_place") return [];
+    return prompt.options.flatMap((o) => {
+      const m = /^place:(\d):(\d+):(\d+)$/.exec(o.id);
+      if (!m) return [];
+      const loc = Number(m[2]) === 4 ? "mzone" : "szone";
+      const w = slotWorld(loc, Number(m[3]), Number(m[1]) === state.you);
+      return [{ id: o.id, x: w.x, z: w.z, label: o.label, picked: selected.includes(o.id) }];
+    });
+  }, [prompt, state, selected]);
+  const onPlace = (id: string) => (prompt && (prompt.max ?? 1) > 1 ? toggle(id) : submit([id]));
   const chainNow = state?.chain ?? [];
   const lastActivate = (() => {
     for (let i = fx.length - 1; i >= 0; i--) {
@@ -198,9 +211,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         </div>
       </div>
 
+      {isMock && <div className="demo-flag">Scripted demo — not real rules. Run the server for real duels.</div>}
       <Inspector code={hover?.code ?? pinned} />
 
-      <Board3D state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
+      <Board3D places={places} onPlace={onPlace} state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
         onCard={onCard} onHover={setHover} onPile={(owner, loc) => setPile({ owner, loc })} />
 
       <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} />

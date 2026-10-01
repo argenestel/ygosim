@@ -1,7 +1,8 @@
 import type { AgentKind, CardData, Deck, DeckValidation, Format, FormatId } from "@ygosim/protocol";
 import { MOCK_CARDS } from "./mockCards";
 
-export const isMock = new URLSearchParams(location.search).get("mock") === "1";
+/** Scripted offline demo (fake rules) — development builds only, never in production. */
+export const isMock = import.meta.env.DEV && new URLSearchParams(location.search).get("mock") === "1";
 
 export function wsUrl(): string {
   const env = (import.meta as any).env?.VITE_WS_URL as string | undefined;

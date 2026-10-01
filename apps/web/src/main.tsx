@@ -1,8 +1,8 @@
 import { createRoot } from "react-dom/client";
 import { lazy, Suspense, useEffect, useState } from "react";
-import { cropUrl } from "./api";
+import { cropUrl, listPresetDecks } from "./api";
 import { playerName, setPlayerName } from "./deck";
-import { activeProfile, coverOf, onDecksChanged } from "./decks/store";
+import { activeProfile, coverOf, onDecksChanged, seedSampleDecks } from "./decks/store";
 import type { DuelLaunch } from "./duel/DuelScreen";
 import { DeckEditor } from "./screens/DeckEditor";
 import { DeckList } from "./screens/DeckList";
@@ -19,6 +19,7 @@ function App() {
   const [name, setName] = useState(playerName());
   const [cover, setCover] = useState(() => { const p = activeProfile(); return p ? coverOf(p) : undefined; });
   useEffect(() => onDecksChanged(() => { const p = activeProfile(); setCover(p ? coverOf(p) : undefined); }), []);
+  useEffect(() => { seedSampleDecks(listPresetDecks); }, []);
 
   if (screen.s === "edit") return <DeckEditor id={screen.id} onBack={() => setScreen({ s: "decks" })} />;
   if (screen.s === "duel") {

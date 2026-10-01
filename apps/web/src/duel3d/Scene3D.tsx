@@ -10,7 +10,12 @@ import { Card3D, type Motion } from "./Card3D";
 import { ActivateFx, AttackFx, ShatterFx, SummonFx } from "./Fx3D";
 import { S, slotWorld, worldTargets } from "./space";
 
+/** A zone the player may pick during select_place, already mapped to the board. */
+export interface PlaceTarget { id: string; x: number; z: number; label: string; picked: boolean; }
+
 interface Props {
+  places?: PlaceTarget[];
+  onPlace?: (id: string) => void;
   state: DuelState;
   fx: Fx[];
   selectable: Set<string>;
@@ -165,7 +170,28 @@ function ChainMarks({ state, targets }: { state: DuelState; targets: Map<string,
   );
 }
 
-function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake }: Props) {
+/** Glowing, clickable zone tiles for select_place prompts (Master Duel style). */
+function PlaceTiles({ places, onPlace }: { places: PlaceTarget[]; onPlace: (id: string) => void }) {
+  const mats = useRef<THREE.MeshBasicMaterial[]>([]);
+  useFrame((st) => { const k = 0.35 + 0.25 * Math.sin(st.clock.elapsedTime * 5); mats.current.forEach((m) => m && (m.opacity = k)); });
+  return (
+    <>
+      {places.map((p, i) => (
+        <group key={p.id} position={[p.x, 0.03, p.z]}>
+          <mesh rotation={[-Math.PI / 2, 0, 0]}
+            onClick={(e) => { e.stopPropagation(); onPlace(p.id); }}
+            onPointerOver={() => (document.body.style.cursor = "pointer")} onPointerOut={() => (document.body.style.cursor = "default")}>
+            <planeGeometry args={[CARD_W * S * 1.06, CARD_H * S * 1.04]} />
+            <meshBasicMaterial ref={(m) => { if (m) mats.current[i] = m; }} color={p.picked ? "#5cc8f2" : "#d6b15e"} transparent opacity={0.5} depthWrite={false} toneMapped={false} />
+          </mesh>
+          <Line points={[[-0.46, 0.01, -0.66], [0.46, 0.01, -0.66], [0.46, 0.01, 0.66], [-0.46, 0.01, 0.66], [-0.46, 0.01, -0.66]]} color={p.picked ? "#5cc8f2" : "#f2d792"} lineWidth={2.5} toneMapped={false} />
+        </group>
+      ))}
+    </>
+  );
+}
+
+function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake, places, onPlace }: Props) {
   const targets = useMemo(() => worldTargets(state.cards, state.you), [state.cards, state.you]);
   const clock = useThree((s) => s.clock);
 
@@ -218,6 +244,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
       <PileHits state={state} onPile={onPile} glowing={glowing} />
       <StatPlates state={state} targets={targets} />
       <ChainMarks state={state} targets={targets} />
+      {places && places.length > 0 && onPlace && <PlaceTiles places={places} onPlace={onPlace} />}
       {state.cards.map((c) => {
         const t = targets.get(c.uid);
         if (!t) return null;

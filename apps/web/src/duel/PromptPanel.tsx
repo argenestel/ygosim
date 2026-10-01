@@ -1,7 +1,7 @@
 import type { Prompt, PromptOption } from "@ygosim/protocol";
 import { CardFace } from "./CardView";
 
-const MULTI_KINDS = new Set<Prompt["kind"]>(["select_card", "select_tribute", "select_sum", "select_counter"]);
+const MULTI_KINDS = new Set<Prompt["kind"]>(["select_card", "select_tribute", "select_sum", "select_counter", "select_place"]);
 export const isMulti = (p: Prompt) => MULTI_KINDS.has(p.kind) && (p.max ?? 1) > 1;
 export const isBoardMenu = (p: Prompt) => p.kind === "idle" || p.kind === "battle_idle";
 
@@ -40,7 +40,7 @@ export function PromptPanel({ prompt, selected, toggle, submit }: Props) {
   const yesNo = prompt.kind === "select_yesno" || prompt.kind === "select_effect_yn";
   return (
     <div className={`prompt-panel kind-${prompt.kind}`}>
-      <div className="prompt-title">{prompt.text}</div>
+      <div className="prompt-title">{prompt.kind === "select_place" ? "Choose a zone — click a glowing zone on the field" : prompt.text}</div>
       {multi && <div className="prompt-sub">Select {min === max ? min : `${min}–${max}`} · {selected.length} chosen</div>}
       <div className={`opts${yesNo ? " row" : ""}`}>
         {prompt.options.map((o) => (

@@ -74,3 +74,22 @@ export function setActiveProfile(id: string) { write(ACTIVE, id); emit(); }
 export function activeProfile(): DeckProfile | undefined { return getProfile(activeProfileId()); }
 
 export const coverOf = (p: DeckProfile) => p.cover ?? p.deck.main[0] ?? p.deck.extra[0];
+
+const SEEDED = "ygosim.seeded";
+/**
+ * First run: replace the placeholder starter with the server's legal sample decks,
+ * so a new player can start a real duel immediately.
+ */
+export async function seedSampleDecks(fetchDecks: () => Promise<{ name: string; deck: Deck }[]>) {
+  if (read<boolean>(SEEDED, false)) return;
+  const samples = await fetchDecks().catch(() => []);
+  if (!samples.length) return;
+  const all = read<DeckProfile[]>(KEY, []);
+  const kept = all.filter((p) => !(p.name === "Starter Deck" && p.deck.main.length < 40));
+  const titled = (n: string) => n.replace(/\b\w/g, (c) => c.toUpperCase());
+  const added = samples.map((d) => ({ id: uid(), name: titled(d.name), deck: d.deck, cover: d.deck.extra[0] ?? d.deck.main[0], updated: Date.now() - 1000 }));
+  write(KEY, [...kept, ...added]);
+  write(SEEDED, true);
+  if (!kept.some((p) => p.id === read<string>(ACTIVE, ""))) write(ACTIVE, added[0].id);
+  emit();
+}
