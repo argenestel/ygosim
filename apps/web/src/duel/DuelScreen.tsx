@@ -150,11 +150,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   if (!state) {
     return (
       <div className="duel-wait">
-        <div className="spinner" />
-        <h2>{view.roomId ? `Room ${view.roomId}` : "Connecting…"}</h2>
-        <p>{view.roomId ? (view.players.length < 2 ? "Waiting for an opponent. Share the room code, or point your agent at it." : "Shuffling decks…") : "Contacting the duel server"}</p>
-        {view.error && <p className="err">{view.error}</p>}
-        <button className="ghost" onClick={onExit}>Back</button>
+        {view.error ? <h2>Couldn’t start the duel</h2> : <><div className="spinner" /><h2>{view.roomId ? `Room ${view.roomId}` : "Connecting…"}</h2></>}
+        {!view.error && <p className="muted">{view.roomId ? (view.players.length < 2 ? "Waiting for an opponent…" : "Shuffling decks…") : "Contacting the duel server"}</p>}
+        {view.error && <p className="err" style={{ maxWidth: 520, textAlign: "center" }}>{view.error.replace(/^duel aborted:\s*/i, "")}</p>}
+        <button className={view.error ? "primary" : "ghost"} onClick={onExit}>{view.error ? "Back to menu" : "Cancel"}</button>
       </div>
     );
   }
