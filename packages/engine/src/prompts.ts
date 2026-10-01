@@ -59,13 +59,6 @@ const BATTLE = {
   end: 3,
 } as const;
 
-const POSITION_NAMES: Record<number, string> = {
-  [OcgPosition.FACEUP_ATTACK]: "Face-up Attack",
-  [OcgPosition.FACEDOWN_ATTACK]: "Face-down Attack",
-  [OcgPosition.FACEUP_DEFENSE]: "Face-up Defense",
-  [OcgPosition.FACEDOWN_DEFENSE]: "Face-down Defense",
-};
-
 const LOCATION_NAMES: Record<number, string> = {
   [OcgLocation.DECK]: "Deck",
   [OcgLocation.HAND]: "Hand",
@@ -134,10 +127,6 @@ function locationLabel(location: number): string {
   return LOCATION_NAMES[location] ?? `Location ${location}`;
 }
 
-function positionLabel(position: number): string {
-  return POSITION_NAMES[position] ?? `Position ${position}`;
-}
-
 function controllerLabel(controller: number, asker: PlayerIdx): string {
   return controller === asker ? "Your" : "Opponent's";
 }
@@ -150,9 +139,18 @@ function cardLabel(ctx: PromptContext, loc: OcgCardLoc, asker?: PlayerIdx, suffi
   return { card, label: `${name} (${where}${suffix ? `; ${suffix}` : ""})` };
 }
 
-function activeCardLabel(ctx: PromptContext, loc: OcgCardLocActive, asker?: PlayerIdx): { card: CardRef; label: string } {
-  const effect = textForDescription(ctx, loc.description, loc.code);
-  return cardLabel(ctx, loc, asker, effect ? `effect: ${effect}` : undefined);
+function actionCardLabel(ctx: PromptContext, loc: OcgCardLoc, cards: OcgCardLoc[]): { card: CardRef; label: string } {
+  const card = ctx.card(loc);
+  const name = loc.code ? ctx.db.get(loc.code)?.name ?? ctx.db.name(loc.code) : "Unknown card";
+  const ambiguous = cards.some((other) => other.code === loc.code && other.location !== loc.location);
+  const where = loc.location === OcgLocation.GRAVE ? "Grave" : locationLabel(loc.location);
+  return { card, label: ambiguous ? `${name} (${where})` : name };
+}
+
+function positionAction(name: string, position: number): string {
+  const target = position & (OcgPosition.FACEUP_DEFENSE | OcgPosition.FACEDOWN_DEFENSE) ? "DEF" : "ATK";
+  const hidden = position & (OcgPosition.FACEDOWN_ATTACK | OcgPosition.FACEDOWN_DEFENSE) ? " (face-down)" : "";
+  return `Change ${name} to ${target} position${hidden}`;
 }
 
 function option(id: string, label: string, card?: CardRef): PromptOption {
@@ -184,17 +182,18 @@ function selectedIndices(ids: string[], options: PromptOption[], min: number, ma
   return ids.map((id) => Number(id));
 }
 
-function cardOptions(ctx: PromptContext, cards: OcgCardLocPos[], asker: PlayerIdx): PromptOption[] {
+function cardOptions(ctx: PromptContext, cards: OcgCardLocPos[]): PromptOption[] {
   return cards.map((loc, index) => {
-    const rendered = cardLabel(ctx, loc, asker);
+    const rendered = actionCardLabel(ctx, loc, cards);
     return option(String(index), rendered.label, rendered.card);
   });
 }
 
-function activeOptions(ctx: PromptContext, cards: OcgCardLocActive[], asker: PlayerIdx): PromptOption[] {
+function activeOptions(ctx: PromptContext, cards: OcgCardLocActive[], action = "Activate", peers: OcgCardLoc[] = cards): PromptOption[] {
   return cards.map((loc, index) => {
-    const rendered = activeCardLabel(ctx, loc, asker);
-    return option(String(index), rendered.label, rendered.card);
+    const rendered = actionCardLabel(ctx, loc, peers);
+    const effect = textForDescription(ctx, loc.description, loc.code);
+    return option(String(index), `${action} ${rendered.label}${effect ? `: ${effect}` : ""}`, rendered.card);
   });
 }
 
@@ -204,7 +203,7 @@ function boundedCardSelection(message: {
   max: number;
   selects: OcgCardLocPos[];
 }, context: PromptContext, playerId: PlayerIdx): TranslatedPrompt {
-  const cards = cardOptions(context, message.selects, playerId);
+  const cards = cardOptions(context, message.selects);
   const requestedMin = bounded(message.min);
   const max = Math.min(bounded(message.max), message.selects.length);
   const min = Math.min(requestedMin, max);
@@ -635,22 +634,29 @@ function idlePrompt(message: Extract<OcgMessage, { type: OcgMessageType.SELECT_I
   if (playerId === undefined) return undefined;
   const options: PromptOption[] = [];
   const actions = new Map<string, { action: number; index: number }>();
-  const addCards = (prefix: string, cards: OcgCardLoc[], action: number, active = false) => {
-    cards.forEach((loc, index) => {
-      const rendered = active
-        ? activeCardLabel(context, loc as OcgCardLocActive, playerId)
-        : cardLabel(context, loc, playerId);
+  const cards = [...message.summons, ...message.special_summons, ...message.pos_changes, ...message.monster_sets, ...message.spell_sets, ...message.activates];
+  const addCards = (prefix: string, choices: OcgCardLoc[], action: number, verb: string) => {
+    choices.forEach((loc, index) => {
+      const rendered = actionCardLabel(context, loc, cards);
       const id = `${prefix}:${index}`;
-      options.push(option(id, `${prefix.replace(/_/g, " ")} — ${rendered.label}`, rendered.card));
+      let label = `${verb} ${rendered.label}`;
+      if (action === IDLE.position) {
+        const current = "position" in loc ? Number(loc.position) : rendered.card.position === "atk" ? OcgPosition.FACEUP_ATTACK : OcgPosition.FACEUP_DEFENSE;
+        label = positionAction(rendered.label, current & 3 ? OcgPosition.FACEUP_DEFENSE : OcgPosition.FACEUP_ATTACK);
+      } else if (action === IDLE.activate) {
+        const effect = textForDescription(context, (loc as OcgCardLocActive).description, loc.code);
+        if (effect) label += `: ${effect}`;
+      }
+      options.push(option(id, label, rendered.card));
       actions.set(id, { action, index });
     });
   };
-  addCards("summon", message.summons, IDLE.summon);
-  addCards("special_summon", message.special_summons, IDLE.specialSummon);
-  addCards("position", message.pos_changes, IDLE.position);
-  addCards("monster_set", message.monster_sets, IDLE.monsterSet);
-  addCards("spell_set", message.spell_sets, IDLE.spellSet);
-  addCards("activate", message.activates, IDLE.activate, true);
+  addCards("summon", message.summons, IDLE.summon, "Normal Summon");
+  addCards("special_summon", message.special_summons, IDLE.specialSummon, "Special Summon");
+  addCards("position", message.pos_changes, IDLE.position, "Change");
+  addCards("monster_set", message.monster_sets, IDLE.monsterSet, "Set");
+  addCards("spell_set", message.spell_sets, IDLE.spellSet, "Set");
+  addCards("activate", message.activates, IDLE.activate, "Activate");
   if (message.to_bp) { options.push(option("to_bp", "Go to Battle Phase")); actions.set("to_bp", { action: IDLE.battle, index: 0 }); }
   if (message.to_ep) { options.push(option("to_ep", "Go to End Phase")); actions.set("to_ep", { action: IDLE.end, index: 0 }); }
   if (message.shuffle) { options.push(option("shuffle", "Shuffle hand")); actions.set("shuffle", { action: IDLE.shuffle, index: 0 }); }
@@ -673,15 +679,15 @@ function battlePrompt(message: Extract<OcgMessage, { type: OcgMessageType.SELECT
   if (playerId === undefined) return undefined;
   const options: PromptOption[] = [];
   const actions = new Map<string, { action: number; index: number }>();
-  activeOptions(context, message.chains, playerId).forEach((o, index) => {
+  activeOptions(context, message.chains, "Activate", [...message.chains, ...message.attacks]).forEach((o, index) => {
     const id = `activate:${index}`;
-    options.push({ ...o, id, label: `Activate — ${o.label}` });
+    options.push({ ...o, id });
     actions.set(id, { action: BATTLE.activate, index });
   });
   message.attacks.forEach((loc, index) => {
-    const rendered = cardLabel(context, loc, playerId, loc.can_direct ? "can attack directly" : undefined);
+    const rendered = actionCardLabel(context, loc, [...message.chains, ...message.attacks]);
     const id = `attack:${index}`;
-    options.push(option(id, `Attack with — ${rendered.label}`, rendered.card));
+    options.push(option(id, `${loc.can_direct ? "Direct attack" : "Attack"} with ${rendered.label}`, rendered.card));
     actions.set(id, { action: BATTLE.attack, index });
   });
   if (message.to_m2) { options.push(option("to_m2", "Go to Main Phase 2")); actions.set("to_m2", { action: BATTLE.main2, index: 0 }); }
@@ -731,7 +737,7 @@ export function translatePrompt(message: OcgMessage, context: PromptContext): Tr
     case OcgMessageType.SELECT_OPTION: {
       const playerId = player(message.player);
       if (playerId === undefined) return undefined;
-      const options = message.options.map((description, index) => option(String(index), descriptionLabel(context, description)));
+      const options = message.options.map((description, index) => option(String(index), `Use effect ${index + 1}: ${descriptionLabel(context, description)}`));
       const p = prompt(context, "select_option", "Choose an option.", options);
       return { player: playerId, prompt: p, respond: (ids) => {
         assertIds(ids, options, 1, 1);
@@ -743,7 +749,7 @@ export function translatePrompt(message: OcgMessage, context: PromptContext): Tr
     case OcgMessageType.SELECT_CHAIN: {
       const playerId = player(message.player);
       if (playerId === undefined) return undefined;
-      const options = activeOptions(context, message.selects, playerId);
+      const options = activeOptions(context, message.selects, "Chain");
       if (!message.forced) options.push(option("pass", "Do not activate / pass"));
       const p = prompt(context, "select_chain", "Choose a chain response.", options);
       return { player: playerId, prompt: p, respond: (ids) => {
@@ -762,7 +768,7 @@ export function translatePrompt(message: OcgMessage, context: PromptContext): Tr
       const allowed = (message.positions & 0xf) || OcgPosition.FACEUP_ATTACK;
       const positions = [OcgPosition.FACEUP_ATTACK, OcgPosition.FACEDOWN_ATTACK, OcgPosition.FACEUP_DEFENSE, OcgPosition.FACEDOWN_DEFENSE]
         .filter((position) => (allowed & position) !== 0);
-      const options = positions.map((position) => option(String(position), positionLabel(position)));
+      const options = positions.map((position) => option(String(position), positionAction(context.db.name(message.code), position)));
       const p = prompt(context, "select_position", `Choose a position for ${context.db.name(message.code)}.`, options);
       return { player: playerId, prompt: p, respond: (ids) => {
         assertIds(ids, options, 1, 1);

@@ -26,6 +26,7 @@ sync_repo() { # url dir
 
 sync_repo https://github.com/ProjectIgnis/CardScripts.git "$DATA/CardScripts"
 sync_repo https://github.com/ProjectIgnis/BabelCDB.git "$DATA/BabelCDB"
+sync_repo https://github.com/ProjectIgnis/LFLists.git "$DATA/LFLists"
 if ! curl -fsSL -o "$DATA/strings.conf" \
   https://raw.githubusercontent.com/ProjectIgnis/Distribution/master/config/strings.conf; then
   echo "warning: could not fetch strings.conf (system strings will be generic)" >&2

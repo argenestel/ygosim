@@ -157,6 +157,60 @@ describe("engine integration", () => {
     }
   }, 120_000);
 
+  it("completes a fixture duel with Fusion and Synchro summon kinds", async () => {
+    const db = await loadCardDb();
+    const fixture = parseYdk(readFileSync(new URL("./fixtures/fusion-synchro.ydk", import.meta.url), "utf8"));
+    expect(fixture.main).toHaveLength(40);
+    expect(fixture.extra).toEqual([58528964, 97204936]);
+    const copies = new Map<number, number>();
+    for (const code of [...fixture.main, ...fixture.extra, ...fixture.side]) {
+      expect(db.get(code), `missing card ${code}`).toBeDefined();
+      const identity = db.raw.get(code)!.alias || code;
+      copies.set(identity, (copies.get(identity) ?? 0) + 1);
+    }
+    expect(Math.max(...copies.values())).toBeLessThanOrEqual(3);
+
+    const seed = 42;
+    const duel = await createDuel({ decks: [fixture, decks()[1]], seed, firstPlayer: 0, chooseFirstTurn: false });
+    const summons: Extract<DuelEvent, { t: "summon" }>[] = [];
+    const random = rng(seed);
+    try {
+      let result = await duel.step();
+      let decisions = 0;
+      while (true) {
+        for (const event of result.events) {
+          if (event.t === "summon") summons.push(event);
+        }
+        if (result.ended || decisions++ >= 2_500) break;
+        if (!result.pending) throw new Error("engine returned neither a prompt nor an ending");
+        const { player, prompt } = result.pending;
+        // The core draws from the end of the fixture in its supplied order.
+        // Build the opening combo before handing the rest of the duel to the
+        // seeded legal-response driver used by the vanilla integration tests.
+        const combo = player === 0 && !summons.some(event => event.kind === "synchro") && prompt.kind === "idle"
+          ? prompt.options.find(option => option.id.startsWith("special_summon:") && option.card?.code === 97204936)
+            ?? prompt.options.find(option => option.id.startsWith("summon:") && option.card?.code === 74093656)
+            ?? prompt.options.find(option => option.id.startsWith("activate:") && option.card?.code === 1845204)
+          : undefined;
+        if (combo) duel.respond(player, { promptId: prompt.promptId, choose: [combo.id] });
+        else respondRandomly(duel, result.pending, random);
+        result = await duel.step();
+      }
+      expect(result.ended, "fixture play should finish").toBeDefined();
+      expect(decisions).toBeLessThan(2_500);
+      expect(summons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "fusion", card: expect.objectContaining({ code: 58528964 }) }),
+        expect.objectContaining({ kind: "synchro", card: expect.objectContaining({ code: 97204936 }) }),
+      ]));
+      // Extra Deck card types can also be revived by ordinary effects.
+      expect(summons).toEqual(expect.arrayContaining([
+        expect.objectContaining({ kind: "special", card: expect.objectContaining({ code: 58528964 }) }),
+      ]));
+    } finally {
+      duel.destroy();
+    }
+  }, 120_000);
+
   it("honors first-player options and keeps duel identity stable across setup", async () => {
     const [firstDeck, secondDeck] = decks();
     const fixed = await createDuel({ decks: [firstDeck, secondDeck], seed: 1, startingLp: 800, firstPlayer: 1 });

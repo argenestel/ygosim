@@ -56,7 +56,7 @@ describe("translatePrompt", () => {
     });
     expect(translated.prompt.kind).toBe("select_card");
     expect(translated.prompt.options.map((o) => o.label)).toEqual([
-      "Alpha (Your Monster Zone 1)", "Beta (Your Monster Zone 2)", "Cancel selection",
+      "Alpha", "Beta", "Cancel selection",
     ]);
     expect(translated.respond(["1"])).toEqual({ type: OcgResponseType.SELECT_CARD, indicies: [1] });
     expect(translated.respond(["cancel"])).toEqual({ type: OcgResponseType.SELECT_CARD, indicies: null });
@@ -97,6 +97,94 @@ describe("translatePrompt", () => {
     });
     expect(battle.respond(["attack:0"])).toEqual({ type: OcgResponseType.SELECT_BATTLECMD, action: 1, index: 0 });
     expect(battle.respond(["to_m2"])).toEqual({ type: OcgResponseType.SELECT_BATTLECMD, action: 2, index: 0 });
+  });
+
+  it("generates player-friendly labels for all idle actions", () => {
+    const idle = translate({
+      type: OcgMessageType.SELECT_IDLECMD, player: 0,
+      summons: [loc(100)], special_summons: [loc(200)],
+      pos_changes: [loc(100), { ...loc(200), position: OcgPosition.FACEUP_DEFENSE }],
+      monster_sets: [loc(200)], spell_sets: [loc(300)],
+      activates: [{ ...loc(100), description: 100n * 16n }],
+      to_bp: true, to_ep: true, shuffle: true,
+    });
+    expect(idle.prompt.options.map((o) => o.label)).toEqual([
+      "Normal Summon Alpha", "Special Summon Beta", "Change Alpha to DEF position",
+      "Change Beta to ATK position", "Set Beta", "Set Gamma", "Activate Alpha: Alpha effect",
+      "Go to Battle Phase", "Go to End Phase", "Shuffle hand",
+    ]);
+    expect(idle.respond(["spell_set:0"])).toEqual({ type: OcgResponseType.SELECT_IDLECMD, action: 4, index: 0 });
+  });
+
+  it("uses tracked positions when idle position choices omit the raw position", () => {
+    const ctx = context();
+    const trackedCard = ctx.card;
+    ctx.card = (card) => ({ ...trackedCard(card), position: card.code === 100 ? "atk" : "def" });
+    const translated = translatePrompt({
+      type: OcgMessageType.SELECT_IDLECMD, player: 0,
+      summons: [], special_summons: [], monster_sets: [], spell_sets: [], activates: [],
+      pos_changes: [
+        { code: 100, controller: 0, location: OcgLocation.MZONE, sequence: 0 },
+        { code: 200, controller: 0, location: OcgLocation.MZONE, sequence: 1 },
+      ], to_bp: false, to_ep: false, shuffle: false,
+    }, ctx)!;
+    expect(translated.prompt.options.map((o) => o.label)).toEqual(["Change Alpha to DEF position", "Change Beta to ATK position"]);
+  });
+
+  it("includes effect descriptions in activation labels with a readable fallback", () => {
+    const ctx = context();
+    ctx.db.raw.set(400, { ...raw(400, "Pot of Greed"), type: 2, strs: ["Draw 2 cards", "Recover 500 LP"] });
+    const battle = translatePrompt({
+      type: OcgMessageType.SELECT_BATTLECMD, player: 0,
+      chains: [
+        { ...loc(400), description: 400n << 20n },
+        { ...loc(400), description: (400n << 20n) | 1n },
+        { ...loc(200), description: 15n },
+      ], attacks: [], to_m2: false, to_ep: false,
+    }, ctx)!;
+    expect(battle.prompt.options.map((o) => o.label)).toEqual([
+      "Activate Pot of Greed: Draw 2 cards", "Activate Pot of Greed: Recover 500 LP", "Activate Beta",
+    ]);
+    expect(battle.respond(["activate:1"])).toEqual({ type: OcgResponseType.SELECT_BATTLECMD, action: 0, index: 1 });
+  });
+
+  it("uses location suffixes only to disambiguate cards in different locations", () => {
+    const choices = [
+      { ...loc(100), location: OcgLocation.HAND },
+      { ...loc(100), location: OcgLocation.GRAVE },
+      loc(200), loc(200, 1),
+    ];
+    const selection = translate({ type: OcgMessageType.SELECT_CARD, player: 0, can_cancel: false, min: 1, max: 1, selects: choices });
+    expect(selection.prompt.options.map((o) => o.label)).toEqual(["Alpha (Hand)", "Alpha (Grave)", "Beta", "Beta"]);
+    const idle = translate({
+      type: OcgMessageType.SELECT_IDLECMD, player: 0,
+      summons: [choices[0]], special_summons: [choices[1]], pos_changes: [], monster_sets: [], spell_sets: [], activates: [],
+      to_bp: false, to_ep: false, shuffle: false,
+    });
+    expect(idle.prompt.options.map((o) => o.label)).toEqual(["Normal Summon Alpha (Hand)", "Special Summon Alpha (Grave)"]);
+  });
+
+  it("labels attacks, chain responses, effect choices and position targets", () => {
+    const battle = translate({
+      type: OcgMessageType.SELECT_BATTLECMD, player: 0, chains: [],
+      attacks: [{ ...loc(100), can_direct: false }, { ...loc(200), can_direct: true }], to_m2: false, to_ep: true,
+    });
+    expect(battle.prompt.options.map((o) => o.label)).toEqual(["Attack with Alpha", "Direct attack with Beta", "Go to End Phase"]);
+    const chain = translate({
+      type: OcgMessageType.SELECT_CHAIN, player: 0, spe_count: 0, forced: true,
+      hint_timing: 0 as any, hint_timing_other: 0 as any,
+      selects: [{ ...loc(100), description: 15n, client_mode: 0 }],
+    });
+    expect(chain.prompt.options[0].label).toBe("Chain Alpha");
+    expect(chain.respond(["0"])).toEqual({ type: OcgResponseType.SELECT_CHAIN, index: 0 });
+    const effect = translate({ type: OcgMessageType.SELECT_OPTION, player: 0, options: [100n * 16n, 200n << 20n] });
+    expect(effect.prompt.options.map((o) => o.label)).toEqual(["Use effect 1: Alpha effect", "Use effect 2: Beta effect"]);
+    expect(effect.respond(["1"])).toEqual({ type: OcgResponseType.SELECT_OPTION, index: 1 });
+    const position = translate({ type: OcgMessageType.SELECT_POSITION, player: 0, code: 100, positions: (OcgPosition.FACEUP_ATTACK | OcgPosition.FACEDOWN_ATTACK | OcgPosition.FACEUP_DEFENSE | OcgPosition.FACEDOWN_DEFENSE) as OcgPosition });
+    expect(position.prompt.options.map((o) => o.label)).toEqual([
+      "Change Alpha to ATK position", "Change Alpha to ATK position (face-down)",
+      "Change Alpha to DEF position", "Change Alpha to DEF position (face-down)",
+    ]);
   });
 
   it("validates tribute values rather than only card count", () => {

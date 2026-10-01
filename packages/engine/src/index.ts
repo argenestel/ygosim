@@ -1,16 +1,20 @@
 import { randomBytes } from "node:crypto";
-import type { Action, Duel, DuelOptions as ProtocolDuelOptions, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
+import type { Action, Duel, DuelOptions as ProtocolDuelOptions, FormatId, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
 import createCore, { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
 import { loadCardDb, toOcgCard, type SqlCardDb } from "./carddb.js";
 import { loadStrings, makeScriptReader } from "./data.js";
 import { translatePrompt } from "./prompts.js";
 import { DuelTracker } from "./state.js";
 import { adaptResponse } from "./response.js";
+import { listFormats, validateDeck } from "./formats.js";
 
 export { loadCardDb } from "./carddb.js";
 export { parseYdk } from "./ydk.js";
+export { listFormats, getBanlist, validateDeck } from "./formats.js";
+export type { Format, FormatId, MatchType, DeckValidation } from "@ygosim/protocol";
 export type { Action, CardData, CardDb, CardRef, Deck, Duel, DuelEvent, DuelState, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
 export interface DuelOptions extends ProtocolDuelOptions {
+  format?: FormatId;
   /** Defaults to player 0. Core teams are mapped to preserve protocol player IDs. */
   firstPlayer?: PlayerIdx;
   /** Ask player 0 to choose who starts before creating the core duel. */
@@ -37,6 +41,11 @@ function validate(opts: DuelOptions, db: SqlCardDb) {
   if (!Number.isInteger(opts.masterRule ?? 5) || (opts.masterRule ?? 5) < 1 || (opts.masterRule ?? 5) > 5) throw new Error("masterRule must be between 1 and 5");
   if (!Array.isArray(opts.decks) || opts.decks.length !== 2) throw new Error("Exactly two decks are required");
   for (const deck of opts.decks) {
+    if (opts.format !== undefined) {
+      const result = validateDeck(deck, opts.format, db);
+      if (!result.ok) throw new Error(result.errors.join("; "));
+      continue;
+    }
     if (deck.main.length < 40 || deck.main.length > 60 || deck.extra.length > 15 || deck.side.length > 15) throw new Error("Deck sizes must be main 40–60, extra/side 0–15");
     const copies = new Map<number, number>();
     for (const [zone, codes] of Object.entries(deck)) for (const code of codes as number[]) {
@@ -68,8 +77,10 @@ class WasmDuel implements Duel {
   private initialize() {
     const readScript = makeScriptReader();
     const masterRule = this.opts.masterRule ?? 5;
-    const flags = [OcgDuelMode.MODE_MR1, OcgDuelMode.MODE_MR2, OcgDuelMode.MODE_MR3, OcgDuelMode.MODE_MR4, OcgDuelMode.MODE_MR5][masterRule - 1];
-    const team = { startingLP: this.opts.startingLp ?? 8000, startingDrawCount: 5, drawCountPerTurn: 1 };
+    let flags = [OcgDuelMode.MODE_MR1, OcgDuelMode.MODE_MR2, OcgDuelMode.MODE_MR3, OcgDuelMode.MODE_MR4, OcgDuelMode.MODE_MR5][masterRule - 1];
+    if (this.opts.format === "speed") flags |= OcgDuelMode.MODE_SPEED;
+    const format = this.opts.format === undefined ? undefined : listFormats().find(format => format.id === this.opts.format);
+    const team = { startingLP: this.opts.startingLp ?? 8000, startingDrawCount: format?.startingHand ?? 5, drawCountPerTurn: format?.drawPerTurn ?? 1 };
     const h = this.core.createDuel({ flags, seed: seeds(this.opts.seed), team1: team, team2: team,
       cardReader: code => { const c = this.db.raw.get(code); if (!c) { this.failures.push(`Missing card data: ${code}`); return null; } return toOcgCard(c); },
       scriptReader: readScript,
@@ -140,6 +151,11 @@ class WasmDuel implements Duel {
 
 /** Create a duel using the local database/scripts and the synchronous WASM core. */
 export async function createDuel(opts: DuelOptions): Promise<Duel> {
+  if (opts.format !== undefined) {
+    const format = listFormats().find(format => format.id === opts.format);
+    if (!format) throw new Error(`Unknown format: ${opts.format}`);
+    opts = { ...opts, masterRule: format.masterRule, startingLp: format.startingLp };
+  }
   const db = await loadCardDb(); validate(opts, db);
   return new WasmDuel(await coreModule(), db, structuredClone(opts));
 }

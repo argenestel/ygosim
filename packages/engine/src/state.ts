@@ -12,9 +12,26 @@ const location = (l: number, s: number): Location => {
   return ({ [L.DECK]: "deck", [L.HAND]: "hand", [L.GRAVE]: "grave", [L.REMOVED]: "banished", [L.EXTRA]: "extra", [L.FZONE]: "fzone", [L.PZONE]: "pzone" } as Record<number, Location>)[l] ?? "mzone";
 };
 const position = (p: number): CardRef["position"] => p & 8 ? "facedown_def" : p & 2 ? "facedown" : p & 4 ? "def" : p & 1 ? "atk" : "facedown";
-const cardPosition = (l: number, p: number): CardRef["position"] => (l & (L.SZONE | L.FZONE | L.PZONE)) !== 0 ? (p & 5 ? "faceup" : "facedown") : position(p);
+const rawFaceUp = (p: CardRef["position"]): boolean => p === "atk" || p === "def" || p === "faceup";
+const fieldLocation = (l: Location): boolean => l === "mzone" || l === "emzone" || l === "szone" || l === "fzone" || l === "pzone";
+const normalizedPosition = (c: Pick<CardRef, "location" | "position">, visible: boolean): CardRef["position"] => {
+  if (fieldLocation(c.location)) return c.position;
+  if (c.location === "deck") return "facedown";
+  if (c.location === "grave") return "faceup";
+  if (c.location === "hand") return visible ? "faceup" : "facedown";
+  return rawFaceUp(c.position) ? "faceup" : "facedown";
+};
 const key = (c: Pick<OcgLocPos, "controller" | "location" | "sequence"> & { overlay_sequence?: number }) => `${c.controller}:${c.location}:${c.sequence}:${c.overlay_sequence ?? ""}`;
 const clone = <T>(v: T): T => structuredClone(v);
+type SummonKind = Extract<DuelEvent, { t: "summon" }>["kind"];
+const summonReasons: [number, SummonKind][] = [
+  [0x40000, "fusion"], [0x80000, "synchro"], [0x100000, "ritual"],
+  [0x200000, "xyz"], [0x10000000, "link"],
+];
+const summonTypes: [number, SummonKind][] = [
+  [0x40, "fusion"], [0x2000, "synchro"], [0x800000, "xyz"],
+  [0x4000000, "link"],
+];
 
 /** Tracks physical instances separately from their public, viewer-specific identities. */
 export class DuelTracker {
@@ -26,6 +43,7 @@ export class DuelTracker {
   chain: DuelState["chain"] = [];
   ended?: { winner: PlayerIdx | null; reason: string };
   private cards = new Map<string, CardRef>();
+  private summonMoveReasons = new Map<string, { code: number; reason?: number; from: number }>();
   private publicCards = new Set<string>();
   private reversedDeck = false;
   private visibleDeckTop: [boolean, boolean] = [false, false];
@@ -39,11 +57,11 @@ export class DuelTracker {
     const k = key(loc);
     let c = this.cards.get(k);
     if (!c) {
-      c = { uid: randomUUID(), code: "code" in loc ? loc.code : undefined, owner: this.player(loc.controller), controller: this.player(loc.controller), location: location(loc.location, loc.sequence), sequence: loc.sequence, position: cardPosition(loc.location, "position" in loc ? loc.position : 0) };
+      c = { uid: randomUUID(), code: "code" in loc ? loc.code : undefined, owner: this.player(loc.controller), controller: this.player(loc.controller), location: location(loc.location, loc.sequence), sequence: loc.sequence, position: position("position" in loc ? loc.position : 0) };
       this.cards.set(k, c);
     }
     if ("code" in loc && loc.code) c.code = loc.code & 0x7fffffff;
-    if ("position" in loc) c.position = cardPosition(loc.location, loc.position);
+    if ("position" in loc) c.position = position(loc.position);
     return clone(c);
   };
 
@@ -83,7 +101,7 @@ export class DuelTracker {
       for (const [k] of shifts) this.cards.delete(k);
       for (const [, c] of shifts) { c.sequence--; this.cards.set(key({ controller: from.controller, location: from.location, sequence: c.sequence }), c); }
     }
-    const c = { ...old, owner: from.location ? old.owner : this.player(to.controller), controller: to.controller < 2 ? this.player(to.controller) : old.controller, location: to.location ? location(to.location, to.sequence) : old.location, sequence: to.location ? to.sequence : old.sequence, position: to.location ? cardPosition(to.location, to.position) : old.position };
+    const c = { ...old, owner: from.location ? old.owner : this.player(to.controller), controller: to.controller < 2 ? this.player(to.controller) : old.controller, location: to.location ? location(to.location, to.sequence) : old.location, sequence: to.location ? to.sequence : old.sequence, position: to.location ? position(to.position) : old.position };
     if (to.location) {
       if ([L.DECK, L.HAND, L.GRAVE, L.REMOVED, L.EXTRA].includes(to.location as 1)) {
         const shifts = [...this.cards.entries()].filter(([k, card]) => k.startsWith(`${to.controller}:${to.location}:`) && card.sequence >= to.sequence);
@@ -102,7 +120,17 @@ export class DuelTracker {
         const p: DuelState["phase"] = m.phase === 1 ? "draw" : m.phase === 2 ? "standby" : m.phase === 4 ? "main1" : m.phase === 256 ? "main2" : m.phase === 512 ? "end" : "battle";
         this.phase = p; return [{ t: "phase", phase: p, turnPlayer: this.turnPlayer }];
       }
-      case M.MOVE: return [this.move(m.from, m.to, m.card)];
+      case M.MOVE: {
+        this.summonMoveReasons.delete(key(m.from));
+        this.summonMoveReasons.delete(key(m.to));
+        // ocgcore-wasm 0.1.2 omits this wire field; accept it when supplied
+        // by a wrapper that preserves it. Track the origin for Extra Deck fallback.
+        const reason = (m as typeof m & { reason?: number }).reason;
+        if ((m.to.location & L.MZONE) !== 0) {
+          this.summonMoveReasons.set(key(m.to), { code: m.card & 0x7fffffff, reason, from: m.from.location });
+        }
+        return [this.move(m.from, m.to, m.card)];
+      }
       case M.DRAW: {
         const drawn = m.drawn.map(c => {
           const deck = [...this.cards.values()].filter(c => c.controller === this.player(m.player) && c.location === "deck");
@@ -111,10 +139,23 @@ export class DuelTracker {
         });
         return [{ t: "draw", player: this.player(m.player), cards: drawn }];
       }
-      case M.SET: return [{ t: "summon", card: this.card(m), kind: "set" }];
+      case M.SET: return (m.location & L.MZONE) !== 0 ? [{ t: "summon", card: this.card(m), kind: "set" }] : [];
       case M.SUMMONING: return [{ t: "summon", card: this.card(m), kind: "normal" }];
       case M.FLIPSUMMONING: return [{ t: "summon", card: this.card(m), kind: "flip" }];
-      case M.SPSUMMONING: return [{ t: "summon", card: this.card(m), kind: "special" }];
+      case M.SPSUMMONING: {
+        const card = this.card(m);
+        const moved = this.summonMoveReasons.get(key(m));
+        this.summonMoveReasons.delete(key(m));
+        const source = moved?.code === card.code ? moved : undefined;
+        const reason = (m as typeof m & { reason?: number }).reason ?? source?.reason;
+        const type = this.db.raw.get(card.code ?? 0)?.type ?? 0;
+        const kind = reason !== undefined
+          ? summonReasons.find(([flag]) => (reason & flag) !== 0)?.[1] ?? "special"
+          : source && (source.from & L.EXTRA) !== 0
+            ? summonTypes.find(([flag]) => (type & flag) !== 0)?.[1] ?? "special"
+            : "special";
+        return [{ t: "summon", card, kind }];
+      }
       case M.POS_CHANGE: return [{ t: "pos_change", card: this.card(m) }];
       case M.CHAINING: {
         const c = this.card(m); this.revealed.set(c, 3);
@@ -135,7 +176,7 @@ export class DuelTracker {
       }
       case M.SHUFFLE_DECK: case M.SHUFFLE_HAND: case M.SHUFFLE_EXTRA: {
         const zone = m.type === M.SHUFFLE_DECK ? "deck" : m.type === M.SHUFFLE_HAND ? "hand" : "extra";
-        for (const [k, c] of this.cards) if (c.controller === this.player(m.player) && c.location === zone && !(zone === "extra" && !c.position.startsWith("facedown"))) this.cards.delete(k);
+        for (const [k, c] of this.cards) if (c.controller === this.player(m.player) && c.location === zone && !(zone === "extra" && rawFaceUp(c.position))) this.cards.delete(k);
         return [{ t: "shuffle", player: this.player(m.player), location: zone }];
       }
       case M.REVERSE_DECK: {
@@ -189,16 +230,18 @@ export class DuelTracker {
   private visible(c: CardRef, viewer: PlayerIdx) {
     if (this.publicCards.has(c.uid)) return true;
     if (c.location === "deck") return false;
-    if (c.controller === viewer) return true;
-    if (c.location === "hand") return false;
-    return !c.position.startsWith("facedown");
+    if (c.location === "grave") return true;
+    return c.controller === viewer || rawFaceUp(c.position);
   }
   private redact(c: CardRef, viewer: PlayerIdx, event = false): CardRef {
     const out = clone(c);
-    const visible = event ? ((this.revealed.get(c) ?? 0) & (1 << viewer)) !== 0 || (c.location !== "deck" && (c.controller === viewer || (!c.position.startsWith("facedown")))) : this.visible(c, viewer);
+    const visible = event
+      ? ((this.revealed.get(c) ?? 0) & (1 << viewer)) !== 0 || (c.location !== "deck" && (c.location === "grave" || c.controller === viewer || rawFaceUp(c.position)))
+      : this.visible(c, viewer);
+    out.position = normalizedPosition(c, visible);
     if (!visible) { delete out.code; delete out.atk; delete out.def; delete out.level; delete out.counters; delete out.overlays; }
     // Viewers cannot follow identities through hidden piles or subsequent shuffles.
-    const maskIdentity = !visible && (c.location === "deck" || (c.controller !== viewer && (c.location === "hand" || c.location === "extra" || c.position.startsWith("facedown"))));
+    const maskIdentity = !visible && (c.location === "deck" || (c.controller !== viewer && (c.location === "hand" || c.location === "extra" || !rawFaceUp(c.position))));
     if (maskIdentity) {
       const slot = `${c.controller}:${c.location}:${c.sequence}`;
       let id = this.aliases[viewer].get(slot); if (!id) { id = randomUUID(); this.aliases[viewer].set(slot, id); }
@@ -214,6 +257,7 @@ export class DuelTracker {
     // A zero code is an unknown opponent card, even though the server knows it.
     if (loc.code) {
       out.code = loc.code & 0x7fffffff;
+      out.position = normalizedPosition(c, true);
     } else {
       delete out.code; delete out.atk; delete out.def; delete out.level; delete out.counters; delete out.overlays;
     }
