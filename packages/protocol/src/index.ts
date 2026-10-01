@@ -73,15 +73,16 @@ export type DuelEvent =
 // ---- WebSocket messages ----
 export type ClientMsg =
   | { type: "hello"; name: string; kind: "human" | "agent" }
-  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck }
+  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType }
   | { type: "join_room"; roomId: string; deck: Deck }
   | { type: "action"; action: Action }
   | { type: "chat"; text: string }
-  | { type: "surrender" };
+  | { type: "surrender" }
+  | { type: "side_deck"; deck: Deck };   // between games of a match
 
 export type ServerMsg =
   | { type: "welcome"; clientId: string }
-  | { type: "room"; roomId: string; players: string[]; status: "waiting" | "dueling" | "done" }
+  | { type: "room"; roomId: string; players: string[]; status: "waiting" | "dueling" | "siding" | "done"; format?: FormatId; match?: MatchType; score?: [number, number]; game?: number }
   | { type: "events"; events: DuelEvent[]; state: DuelState }
   | { type: "prompt"; prompt: Prompt; state: DuelState }
   | { type: "chat"; from: string; text: string }
@@ -111,3 +112,24 @@ export interface CardDb {
   get(code: number): CardData | undefined;
   search(q: { name?: string; type?: string; limit?: number }): CardData[];
 }
+
+// ---- Formats / banlists ----
+// Banlists come from ProjectIgnis/LFLists (*.lflist.conf). 0 = forbidden, 1 = limited, 2 = semi-limited.
+export type FormatId = "tcg" | "ocg" | "traditional" | "unlimited" | "goat" | "edison" | "speed" | string;
+export type MatchType = "single" | "match";   // match = best-of-3 with side decking
+export interface Format {
+  id: FormatId;
+  name: string;
+  description: string;
+  banlist: string;            // banlist name as in the .lflist.conf header (e.g. "2026.07 TCG")
+  masterRule: number;         // ocgcore duel rule (1-5)
+  startingLp: number;
+  startingHand: number;
+  drawPerTurn: number;
+  deck: { mainMin: number; mainMax: number; extraMax: number; sideMax: number };
+  whitelist?: boolean;        // true = only cards listed on the banlist are legal (Goat/Edison)
+  traditional?: boolean;      // forbidden cards treated as limited
+}
+export interface DeckValidation { ok: boolean; errors: string[]; format: FormatId; }
+// HTTP: GET /api/formats -> Format[]; GET /api/banlist/:format -> Record<code, 0|1|2>;
+//       POST /api/decks/validate { deck, format } -> DeckValidation
