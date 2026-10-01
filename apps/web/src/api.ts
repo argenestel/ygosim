@@ -1,4 +1,4 @@
-import type { CardData, Deck, DeckValidation, Format, FormatId } from "@ygosim/protocol";
+import type { AgentKind, CardData, Deck, DeckValidation, Format, FormatId } from "@ygosim/protocol";
 import { MOCK_CARDS } from "./mockCards";
 
 export const isMock = new URLSearchParams(location.search).get("mock") === "1";
@@ -121,4 +121,83 @@ export function getBanlist(format: FormatId): Promise<Record<number, 0 | 1 | 2>>
     banCache.set(format, p);
   }
   return p;
+}
+
+/** Card art helpers (all served through the CORS proxy). */
+export const artUrl = (code: number) => `/api/img/${code}`;
+export const thumbUrl = (code: number) => `/api/img/small/${code}`;
+export const cropUrl = (code: number) => `/api/img/crop/${code}`;
+
+export interface CardQuery { q?: string; kind?: "monster" | "spell" | "trap" | "extra"; attribute?: string; race?: string; level?: number; sort?: "name" | "atk" | "level"; offset?: number; limit?: number; }
+
+/** Paged, filterable card browser. Falls back to client-side filtering of a plain search. */
+export async function browseCards(q: CardQuery): Promise<{ total: number; cards: CardData[] }> {
+  const params = new URLSearchParams();
+  for (const [k, v] of Object.entries(q)) if (v !== undefined && v !== "") params.set(k, String(v));
+  try {
+    if (isMock) throw new Error("mock");
+    const r = await fetch(`/api/cards?${params}`);
+    if (!r.ok) throw new Error(String(r.status));
+    const j: any = await r.json();
+    const cards: CardData[] = Array.isArray(j) ? j : j.cards ?? [];
+    cards.forEach((c) => cache.set(c.code, c));
+    return { total: Array.isArray(j) ? cards.length : j.total ?? cards.length, cards: filterLocal(cards, q) };
+  } catch {
+    const all = Object.values(MOCK_CARDS).filter((c) => !q.q || c.name.toLowerCase().includes(q.q.toLowerCase()));
+    const f = filterLocal(all, q);
+    return { total: f.length, cards: f.slice(q.offset ?? 0, (q.offset ?? 0) + (q.limit ?? 60)) };
+  }
+}
+
+const EXTRA_T = ["Fusion", "Synchro", "Xyz", "Link"];
+function filterLocal(cards: CardData[], q: CardQuery) {
+  return cards.filter((c) => {
+    if (q.kind === "monster" && !c.type.includes("Monster")) return false;
+    if (q.kind === "spell" && !c.type.includes("Spell")) return false;
+    if (q.kind === "trap" && !c.type.includes("Trap")) return false;
+    if (q.kind === "extra" && !c.type.some((t) => EXTRA_T.includes(t))) return false;
+    if (q.attribute && c.attribute !== q.attribute) return false;
+    if (q.race && c.race !== q.race) return false;
+    if (q.level !== undefined && c.level !== q.level) return false;
+    return true;
+  });
+}
+
+/** Resolve card names from a pasted list to passcodes. */
+export async function resolveNames(names: string[]): Promise<(number | null)[]> {
+  try {
+    const r = await fetch(`/api/cards/resolve`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ names }) });
+    if (!r.ok) throw new Error();
+    const j: any = await r.json();
+    return j.codes ?? j;
+  } catch {
+    // Fallback: one search per name, take an exact (case-insensitive) match or the first hit.
+    return Promise.all(names.map(async (n) => {
+      const hits = await searchCards(n);
+      const exact = hits.find((c) => c.name.toLowerCase() === n.toLowerCase());
+      return (exact ?? hits[0])?.code ?? null;
+    }));
+  }
+}
+
+export interface AgentInfo { agent: AgentKind; installed: boolean; launchable: boolean; connectCommand: string; }
+export async function listAgents(): Promise<AgentInfo[]> {
+  try {
+    if (isMock) throw new Error();
+    const r = await fetch(`/api/agents`);
+    if (!r.ok) throw new Error();
+    return await r.json();
+  } catch {
+    return [
+      { agent: "claude", installed: false, launchable: false, connectCommand: "claude mcp add ygosim -- node <repo>/packages/mcp/dist/index.js" },
+      { agent: "codex", installed: false, launchable: false, connectCommand: "codex mcp add ygosim -- node <repo>/packages/mcp/dist/index.js" },
+    ];
+  }
+}
+export async function launchAgent(roomId: string, agent: AgentKind, seat?: number): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const r = await fetch(`/api/agents/launch`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ roomId, agent, seat }) });
+    const j: any = await r.json().catch(() => ({}));
+    return { ok: r.ok && j.ok !== false, error: j.error };
+  } catch (e) { return { ok: false, error: (e as Error).message }; }
 }

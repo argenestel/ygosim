@@ -20,6 +20,7 @@ export interface View {
   shake: number;
   result?: { winner: number | null; reason: string };
   chat: { from: string; text: string }[];
+  agents: Partial<Record<number, { agent: string; status: string; detail?: string }>>;
   error?: string;
   busy: boolean;              // animations playing
 }
@@ -28,7 +29,8 @@ type Act =
   | { k: "set"; patch: Partial<View> }
   | { k: "state"; fn: (s: DuelState) => DuelState }
   | { k: "fx+"; fx: Fx } | { k: "fx-"; id: number }
-  | { k: "chat"; from: string; text: string };
+  | { k: "chat"; from: string; text: string }
+  | { k: "agent"; seat: number; info: { agent: string; status: string; detail?: string } };
 
 function reducer(v: View, a: Act): View {
   switch (a.k) {
@@ -37,6 +39,7 @@ function reducer(v: View, a: Act): View {
     case "fx+": return { ...v, fx: [...v.fx, a.fx] };
     case "fx-": return { ...v, fx: v.fx.filter((f) => f.id !== a.id) };
     case "chat": return { ...v, chat: [...v.chat.slice(-50), { from: a.from, text: a.text }] };
+    case "agent": return { ...v, agents: { ...v.agents, [a.seat]: a.info } };
   }
 }
 
@@ -89,7 +92,7 @@ export function durationOf(e: DuelEvent): number {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: string) => void) => Conn) {
-  const [view, dispatch] = useReducer(reducer, { players: [], fx: [], shake: 0, chat: [], busy: false });
+  const [view, dispatch] = useReducer(reducer, { players: [], fx: [], shake: 0, chat: [], busy: false, agents: {} });
   const conn = useRef<Conn | null>(null);
   const queue = useRef<{ events: DuelEvent[]; state: DuelState; prompt?: Prompt }[]>([]);
   const running = useRef(false);
@@ -146,6 +149,7 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
           case "events": queue.current.push({ events: m.events, state: m.state }); pump(); break;
           case "prompt": queue.current.push({ events: [], state: m.state, prompt: m.prompt }); pump(); break;
           case "chat": dispatch({ k: "chat", from: m.from, text: m.text }); break;
+          case "agent_status": dispatch({ k: "agent", seat: m.seat, info: { agent: m.agent, status: m.status, detail: m.detail } }); break;
           case "error": dispatch({ k: "set", patch: { error: m.message } }); break;
         }
       },

@@ -1,6 +1,6 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
+import type { AgentKind, CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
 import { isMock } from "../api";
 import { isMuted, setMuted, uiClick } from "../sfx";
 import { createMockConn } from "../mock";
@@ -10,12 +10,16 @@ import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
 import { SideDeck } from "./SideDeck";
+import { AgentWaiting } from "./AgentWaiting";
 import { useDuel } from "./useDuel";
 
 export type DuelLaunch = (
   | { mode: "ai"; level: "easy" | "normal" | "hard" }
+  | { mode: "agent"; agent: AgentKind; launch: boolean }
+  | { mode: "watch"; agent: AgentKind; rival: AgentKind; level: "easy" | "normal" | "hard"; launch: boolean }
   | { mode: "create" }
   | { mode: "join"; roomId: string }
+  | { mode: "spectate"; roomId: string }
 ) & { format?: FormatId; match?: MatchType };
 
 const PHASES = [["draw", "DP"], ["standby", "SP"], ["main1", "M1"], ["battle", "BP"], ["main2", "M2"], ["end", "EP"]] as const;
@@ -61,9 +65,14 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     const c = isMock ? createMockConn(onMsg) : connect(onMsg, onClose);
     c.send({ type: "hello", name, kind: "human" });
     const rules = { format: launch.format, match: launch.match };
-    if (launch.mode === "ai") c.send({ type: "create_room", vsAI: true, aiLevel: launch.level, deck, ...rules });
-    else if (launch.mode === "create") c.send({ type: "create_room", deck, ...rules });
-    else c.send({ type: "join_room", roomId: launch.roomId, deck });
+    switch (launch.mode) {
+      case "ai": c.send({ type: "create_room", vsAI: true, aiLevel: launch.level, opponent: { kind: "bot", level: launch.level }, deck, ...rules }); break;
+      case "agent": c.send({ type: "create_room", opponent: { kind: launch.agent, launch: launch.launch }, deck, ...rules }); break;
+      case "watch": c.send({ type: "create_room", spectateOnly: true, opponent: { kind: launch.rival, level: launch.level }, deck, opponentDeck: deck, ...rules }); break;
+      case "create": c.send({ type: "create_room", deck, ...rules }); break;
+      case "join": c.send({ type: "join_room", roomId: launch.roomId, deck }); break;
+      case "spectate": c.send({ type: "spectate", roomId: launch.roomId }); break;
+    }
     return c;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -132,6 +141,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
   if (view.roomStatus === "siding") {
     return <SideDeck deck={deck} score={view.score} game={view.game} onDone={(d) => send({ type: "side_deck", deck: d })} />;
+  }
+
+  if (!state && view.roomId && (launch.mode === "agent" || launch.mode === "watch" || launch.mode === "create")) {
+    return <AgentWaiting roomId={view.roomId} launch={launch} players={view.players} agents={view.agents} error={view.error} onExit={onExit} />;
   }
 
   if (!state) {

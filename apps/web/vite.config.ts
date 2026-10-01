@@ -7,6 +7,10 @@ export default defineConfig({
     port: 5173,
     proxy: {
       // Card art for WebGL textures needs CORS; the game server proxies it too in prod.
+      "/api/img/crop": {
+        target: "https://images.ygoprodeck.com", changeOrigin: true,
+        rewrite: (p) => p.replace(/^\/api\/img\/crop\/(\d+)$/, "/images/cards_cropped/$1.jpg"),
+      },
       "/api/img/small": {
         target: "https://images.ygoprodeck.com", changeOrigin: true,
         rewrite: (p) => p.replace(/^\/api\/img\/small\/(\d+)$/, "/images/cards_small/$1.jpg"),

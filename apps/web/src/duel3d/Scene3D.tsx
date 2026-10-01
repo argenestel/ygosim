@@ -51,13 +51,13 @@ const tableMat = new THREE.ShaderMaterial({
     float grid(vec2 p, float s){ vec2 g = abs(fract(p*s-0.5)-0.5)/fwidth(p*s); return 1.0-min(min(g.x,g.y),1.0); }
     void main(){
       vec2 p = vUv - 0.5;
-      vec3 me = vec3(0.004,0.010,0.03), op = vec3(0.018,0.004,0.014);
+      vec3 me = vec3(0.010,0.014,0.024), op = vec3(0.014,0.012,0.020);
       vec3 col = mix(me, op, smoothstep(-0.05,0.05,p.y));
       col += grid(vUv, 28.0) * 0.008 * vec3(0.5,0.7,1.0);
       float center = exp(-abs(p.y)*90.0);
-      col += center * vec3(1.0,0.78,0.4) * (0.12 + 0.04*sin(uTime*2.0));
+      col += center * vec3(0.84,0.69,0.37) * (0.10 + 0.03*sin(uTime*2.0));
       float r = length(p*vec2(1.0,1.1));
-      col += 0.05*exp(-r*r*14.0)*vec3(0.3,0.5,1.0);
+      col += 0.035*exp(-r*r*14.0)*vec3(0.55,0.6,0.75);
       col *= smoothstep(0.75, 0.3, r);
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -71,7 +71,8 @@ function Table() {
   const rect = (x: number, z: number): [number, number, number][] => [
     [x - w / 2, 0.006, z - h / 2], [x + w / 2, 0.006, z - h / 2], [x + w / 2, 0.006, z + h / 2], [x - w / 2, 0.006, z + h / 2], [x - w / 2, 0.006, z - h / 2],
   ];
-  const color: Record<string, string> = { monster: "#5a8cff", spell: "#3fd6b5", field: "#f5c86a", pile: "#7a86b0", emz: "#c27bff" };
+  // One neutral line colour; gold only marks the shared Extra Monster Zones.
+  const color: Record<string, string> = { monster: "#8a97b0", spell: "#8a97b0", field: "#8a97b0", pile: "#5f6a80", emz: "#d6b15e" };
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow material={tableMat}>
@@ -79,7 +80,7 @@ function Table() {
       </mesh>
       {frames.map((f) => (
         <group key={f.key}>
-          <Line points={rect(f.x * S, f.y * S)} color={color[f.kind]} lineWidth={1.4} transparent opacity={0.75} toneMapped={false} />
+          <Line points={rect(f.x * S, f.y * S)} color={color[f.kind]} lineWidth={1.2} transparent opacity={0.45} toneMapped={false} />
           {f.label && (
             <Text position={[f.x * S, 0.01, f.y * S]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.12} color={color[f.kind]} fillOpacity={0.5} letterSpacing={0.2}>{f.label}</Text>
           )}
@@ -186,9 +187,9 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
       <fog attach="fog" args={["#04060d", 14, 26]} />
       <ambientLight intensity={0.55} />
       <directionalLight position={[3, 10, 6]} intensity={1.6} castShadow shadow-mapSize={[1024, 1024]} />
-      <pointLight position={[0, 3, 0]} intensity={8} color="#f5c86a" distance={8} />
+      <pointLight position={[0, 3, 0]} intensity={5} color="#e8d2a0" distance={8} />
       <Table />
-      <Sparkles count={70} scale={[14, 4, 12]} position={[0, 2, 0]} size={2.2} speed={0.25} color="#8fb8ff" opacity={0.5} />
+      <Sparkles count={40} scale={[14, 4, 12]} position={[0, 2, 0]} size={1.8} speed={0.2} color="#d6c39a" opacity={0.35} />
       <PileHits state={state} onPile={onPile} glowing={glowing} />
       <StatPlates state={state} targets={targets} />
       {state.cards.map((c) => {
