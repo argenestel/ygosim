@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { serve } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
+import { fileURLToPath } from "node:url";
 import type { IncomingMessage } from "node:http";
 import type { CardDb, ServerMsg, FormatId } from "@ygosim/protocol";
 import { Lobby } from "./lobby.js";
@@ -23,7 +24,8 @@ export function buildApi(
   getDb: () => CardDb | null,
   getEngine: () => EngineApi | null,
   getDbReady: () => Promise<CardDb | null>,
-  parse = parseYdkLocal
+  parse = parseYdkLocal,
+  getPort = () => Number(process.env.PORT ?? 7777),
 ) {
   const app = new Hono();
   app.use("/api/*", cors());
@@ -47,11 +49,11 @@ export function buildApi(
     const race = c.req.query("race");
     const level = c.req.query("level");
     const sort = c.req.query("sort") ?? "name";
-    const limit = Math.min(Number(c.req.query("limit") ?? 50) || 50, 200);
-    const offset = Math.max(Number(c.req.query("offset") ?? 0) || 0, 0);
+    const limit = Math.max(1, Math.min(Math.floor(Number(c.req.query("limit") ?? 50)) || 50, 200));
+    const offset = Math.max(Math.floor(Number(c.req.query("offset") ?? 0)) || 0, 0);
 
     // Search for cards
-    let cards = db.search({ name: query, type: kind, limit: 200 });
+    let cards = db.search({ name: query, type: kind, limit: Number.MAX_SAFE_INTEGER });
 
     // Filter by additional criteria
     cards = cards.filter(card => {
@@ -150,11 +152,12 @@ export function buildApi(
     }
     const engine = getEngine();
     if (engine) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         // Wait for database to be ready before validating
         const db = getDb() ?? await Promise.race([
           getDbReady(),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error("database load timeout")), 10000)),
+          new Promise<null>((_, reject) => (timer = setTimeout(() => reject(new Error("database load timeout")), 10000))),
         ]);
         if (!db) {
           return c.json({ ok: false, errors: ["card database unavailable"], format }, 503);
@@ -164,6 +167,8 @@ export function buildApi(
       } catch (e) {
         console.warn("[api] engine validateDeck failed:", e);
         return c.json({ ok: false, errors: [`validation error: ${(e as Error).message}`], format }, 503);
+      } finally {
+        clearTimeout(timer);
       }
     }
     return c.json({ ...validateDeck(deck, getDb()), deck, format });
@@ -171,8 +176,8 @@ export function buildApi(
 
   app.get("/api/agents", (c) => {
     try {
-      const mpcPath = new URL(import.meta.url).pathname.replace(/server\/.*/, "mcp/dist/index.js");
-      const agents = getAgentInfo(mpcPath);
+      const mpcPath = fileURLToPath(new URL("../../mcp/dist/index.js", import.meta.url));
+      const agents = getAgentInfo(mpcPath, getPort());
       return c.json(agents);
     } catch (e) {
       return c.json({ error: (e as Error).message }, 500);
@@ -187,7 +192,7 @@ export function buildApi(
     }
     try {
       const body = await c.req.json() as any;
-      const mpcPath = new URL(import.meta.url).pathname.replace(/server\/.*/, "mcp/dist/index.js");
+      const mpcPath = fileURLToPath(new URL("../../mcp/dist/index.js", import.meta.url));
       const result = await launchAgent(mpcPath, body.agent, body.roomId, body.seat ?? 1);
       return c.json(result);
     } catch (e) {
@@ -269,7 +274,8 @@ export async function startServer(opts: ServerOptions = {}) {
     maxInvalid: opts.maxInvalid,
   }, undefined, getEngine, getDbReady);
 
-  const app = buildApi(lobby, getDb, getEngine, getDbReady, parse);
+  let actualPort = port;
+  const app = buildApi(lobby, getDb, getEngine, getDbReady, parse, () => actualPort);
 
   // Ensure image cache directory exists
   await ensureImgDir().catch((e) => console.warn("[server] failed to create image cache dir:", e));
@@ -290,11 +296,37 @@ export async function startServer(opts: ServerOptions = {}) {
     });
     ws.on("close", () => lobby.disconnect(session));
   });
-  await new Promise<void>((r) => (http.listening ? r() : http.once("listening", () => r())));
+  await new Promise<void>((resolve, reject) => {
+    const onError = (error: Error) => {
+      http.off("listening", onListening);
+      wss.close();
+      reject(error);
+    };
+    const onListening = () => {
+      http.off("error", onError);
+      resolve();
+    };
+    if (http.listening) resolve();
+    else {
+      http.once("error", onError);
+      http.once("listening", onListening);
+    }
+  });
   const addr = http.address();
-  const actualPort = typeof addr === "object" && addr ? addr.port : port;
+  actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {
     port: actualPort, lobby, app,
-    close: () => new Promise<void>((r) => { for (const c of wss.clients) c.terminate(); wss.close(); http.close(() => r()); }),
+    close: async () => {
+      const roomsClosed = Promise.all([...lobby.rooms.values()].map(room => room.close()));
+      for (const client of wss.clients) client.terminate();
+      await Promise.all([
+        roomsClosed,
+        new Promise<void>(resolve => wss.close(() => resolve())),
+        new Promise<void>((resolve, reject) => {
+          http.close(error => error ? reject(error) : resolve());
+          if ("closeAllConnections" in http) http.closeAllConnections();
+        }),
+      ]);
+    },
   };
 }

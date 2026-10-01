@@ -62,6 +62,9 @@ export class NormalBot implements Bot {
       }
       case "select_card":
       case "select_tribute": {
+        // Prefer an actual selection over canceling and retrying the same summon.
+        if (o.id === "finish") return 10_000;
+        if (o.id === "cancel" || o.id.startsWith("unselect:")) return -10_000;
         // Prefer opponent's strong cards as targets; tribute own weakest.
         if (!o.card) return 0;
         const own = o.card.controller === state.you;

@@ -3,7 +3,7 @@ import { writeFileSync, unlinkSync, existsSync } from "node:fs";
 import type { AgentKind, AgentStatus } from "@ygosim/protocol";
 
 export interface AgentInfo {
-  kind: AgentKind;
+  agent: AgentKind;
   installed: boolean;
   launchable: boolean;
   connectCommand: string;
@@ -27,42 +27,20 @@ function commandExists(cmd: string): boolean {
   }
 }
 
-export function getAgentInfo(mpcPath: string): AgentInfo[] {
-  const agents: AgentInfo[] = [];
-
-  // Check for Claude Code
-  const claudeInstalled = commandExists("claude");
-  const claudeLaunchable = claudeInstalled && process.env.YGOSIM_ALLOW_AGENT_LAUNCH === "1";
-  agents.push({
-    kind: "claude",
-    installed: claudeInstalled,
-    launchable: claudeLaunchable,
-    connectCommand: claudeInstalled
-      ? `claude mcp add ygosim "node ${mpcPath}"`
-      : "Claude Code not installed",
+export function getAgentInfo(mcpPath: string, port = Number(process.env.PORT ?? 7777)): AgentInfo[] {
+  // Quote paths only when needed, preserving a separate executable and argument.
+  const pathArg = /^[a-zA-Z0-9_./-]+$/.test(mcpPath)
+    ? mcpPath : `'${mcpPath.replaceAll("'", "'\\''")}'`;
+  return (["claude", "codex"] as const).map(agent => {
+    const installed = commandExists(agent);
+    const envFlag = agent === "claude" ? "-e" : "--env";
+    return {
+      agent,
+      installed,
+      launchable: installed && process.env.YGOSIM_ALLOW_AGENT_LAUNCH === "1",
+      connectCommand: `${agent} mcp add ygosim ${envFlag} YGOSIM_URL=ws://localhost:${port} -- node ${pathArg}`,
+    };
   });
-
-  // Check for Codex
-  const codexInstalled = commandExists("codex");
-  const codexLaunchable = codexInstalled && process.env.YGOSIM_ALLOW_AGENT_LAUNCH === "1";
-  agents.push({
-    kind: "codex",
-    installed: codexInstalled,
-    launchable: codexLaunchable,
-    connectCommand: codexInstalled
-      ? `codex mcp add ygosim "node ${mpcPath}"`
-      : "Codex not installed",
-  });
-
-  // Bot is always available
-  agents.push({
-    kind: "bot",
-    installed: true,
-    launchable: true,
-    connectCommand: "Built-in AI opponent",
-  });
-
-  return agents;
 }
 
 export async function launchAgent(

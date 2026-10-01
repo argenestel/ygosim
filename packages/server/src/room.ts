@@ -44,6 +44,7 @@ export class Room {
   private duel?: Duel;
   private wait?: PendingWait;
   private surrendered?: PlayerIdx;
+  private closed = false;
   private siding?: Map<PlayerIdx, () => void>;
   readonly opts: Required<Omit<RoomOptions, "seed">> & { seed?: number };
   /** Resolves when the duel loop finishes. */
@@ -97,6 +98,15 @@ export class Room {
       this.decks[seat] = undefined;
       this.originalDecks[seat] = undefined;
     }
+  }
+
+  /** Stop pending decisions/siding and let the duel loop release its engine. */
+  async close(): Promise<void> {
+    this.closed = true;
+    this.status = "done";
+    this.wait?.resolve(defaultAction(this.wait.prompt));
+    for (const confirm of this.siding?.values() ?? []) confirm();
+    await this.finished;
   }
 
   roomMsg(): ServerMsg {
@@ -159,6 +169,7 @@ export class Room {
     let firstPlayer: PlayerIdx = 0;
     try {
       for (;;) {
+        if (this.closed) return;
         await this.runGame(firstPlayer);
         if (this.isGameDone()) return;
         // Save a snapshot before destroying the old duel for the match prompt.
@@ -168,6 +179,7 @@ export class Room {
         this.duel?.destroy();
         this.duel = undefined;
         await this.sideDecks();
+        if (this.closed) return;
         this.game++;
         this.surrendered = undefined;
         this.status = "dueling";
@@ -228,12 +240,18 @@ export class Room {
     this.status = "dueling";
     this.broadcastRoom();
     this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed, format: this.format, firstPlayer });
-    for (;;) {
+    for (let steps = 0; ; steps++) {
+      // Synchronous engines and bots otherwise keep the microtask queue busy,
+      // preventing socket messages, deadlines and shutdown from being handled.
+      if (steps % 100 === 99) await new Promise<void>(resolve => setImmediate(resolve));
+      if (this.closed) return;
       if (this.surrendered !== undefined) {
         this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
         break;
       }
+
       const res = await this.duel.step();
+      if (this.closed) return;
       this.sendEvents(res.events);
       if (res.ended || !res.pending) {
         const gameWinner = res.ended?.winner ?? null;
@@ -263,7 +281,7 @@ export class Room {
         safeSend(seat, { type: "prompt", prompt, state: duel.stateFor(player) });
         action = await answer;
       }
-      if (this.surrendered !== undefined) return;
+      if (this.closed || this.surrendered !== undefined) return;
       try {
         duel.respond(player, action);
         return;

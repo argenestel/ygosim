@@ -189,3 +189,30 @@ describe("Enforced Deck Validation (lobby)", () => {
     expect(room?.decks[0]).toEqual(sampleDeck);
   });
 });
+
+describe("Real-engine TCG validation", { skip: !process.env.YGOSIM_TEST_ENGINE }, () => {
+  it("rejects Pot of Greed before creating a room and leaves /api/rooms empty", async () => {
+    const { loadEngine } = await import("../src/engine.js");
+    const { buildApi } = await import("../src/server.js");
+    const engine = await loadEngine();
+    if (!engine) throw new Error("YGOSIM_TEST_ENGINE requires the real engine");
+    const db = await engine.loadCardDb();
+    const lobby = new Lobby(opts => engine.createDuel(opts), {}, undefined, () => engine, async () => db);
+    const app = buildApi(lobby, () => db, () => engine, async () => db, engine.parseYdk);
+    const decks = await (await app.request("/api/decks")).json() as { id: string; deck: Deck }[];
+    const sample = decks.find(deck => deck.id === "junk-synchro" || deck.id === "utopia-xyz");
+    expect(sample).toBeDefined();
+    const deck = structuredClone(sample!.deck);
+    deck.main[0] = 55144522;
+    const messages: ServerMsg[] = [];
+    const session = lobby.connect(msg => messages.push(msg));
+    try {
+      await lobby.handle(session, { type: "create_room", format: "tcg", deck });
+      expect(messages).toContainEqual({ type: "error", message: expect.stringMatching(/invalid deck:.*Pot of Greed.*Forbidden/i) });
+      expect(session.room).toBeUndefined();
+      expect(await (await app.request("/api/rooms")).json()).toEqual([]);
+    } finally {
+      lobby.disconnect(session);
+    }
+  }, 20_000);
+});

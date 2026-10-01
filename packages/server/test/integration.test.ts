@@ -83,6 +83,43 @@ describe("Live Integration Test (WebSocket)", { skip: !process.env.YGOSIM_TEST_E
     }
   }
 
+  it("rejects a TCG room containing Pot of Greed over WebSocket without listing a room", async () => {
+    const engine = await loadEngine();
+    if (!engine) throw new Error("YGOSIM_TEST_ENGINE requires the real engine");
+    const server = await startServer({ port: 0, engine });
+    let ws: WebSocket | undefined;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const base = `http://127.0.0.1:${server.port}`;
+      const decks = await (await fetch(`${base}/api/decks`, { signal: AbortSignal.timeout(5000) })).json() as { id: string; deck: Deck }[];
+      const sample = decks.find(deck => deck.id === "junk-synchro" || deck.id === "utopia-xyz");
+      expect(sample).toBeDefined();
+      const deck = structuredClone(sample!.deck);
+      deck.main[0] = 55144522;
+      ws = new WebSocket(`ws://127.0.0.1:${server.port}/ws`);
+      const client = ws;
+      const error = await new Promise<Extract<ServerMsg, { type: "error" }>>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("TCG validation response timed out")), 10_000);
+        client.on("error", reject);
+        client.on("close", () => reject(new Error("Socket closed before validation")));
+        client.on("message", data => {
+          try {
+            const msg = JSON.parse(String(data)) as ServerMsg;
+            if (msg.type === "welcome") client.send(JSON.stringify({ type: "create_room", format: "tcg", deck }));
+            if (msg.type === "room") reject(new Error("Invalid deck created a room"));
+            if (msg.type === "error") resolve(msg);
+          } catch (error) { reject(error); }
+        });
+      });
+      expect(error.message).toMatch(/invalid deck:.*Pot of Greed.*Forbidden/i);
+      expect(await (await fetch(`${base}/api/rooms`, { signal: AbortSignal.timeout(5000) })).json()).toEqual([]);
+    } finally {
+      clearTimeout(timer);
+      ws?.terminate();
+      await server.close();
+    }
+  }, 20_000);
+
   it("plays a complete AI game via WebSocket", async () => {
     const { wins, sidedGames } = await play("single");
     expect(wins).toHaveLength(1);
@@ -121,25 +158,39 @@ describe("Live Integration Test (WebSocket)", { skip: !process.env.YGOSIM_TEST_E
       return engine.createDuel(opts);
     }, { botDelayMs: 0, seed: 1 });
     const messages: ServerMsg[] = [];
+    let handlerError: unknown;
+    const dispatch = (msg: ClientMsg) => {
+      void lobby.handle(session, msg).catch(error => { handlerError = error; });
+    };
     const session = lobby.connect(msg => {
       messages.push(structuredClone(msg));
       // Use the same wire messages routed by the WebSocket handler.
-      if (msg.type === "prompt") queueMicrotask(() => lobby.handle(session, { type: "action", action: defaultAction(msg.prompt) }));
-      if (msg.type === "room" && msg.status === "siding") queueMicrotask(() => lobby.handle(session, { type: "side_deck", deck: sided }));
+      if (msg.type === "prompt") queueMicrotask(() => dispatch({ type: "action", action: defaultAction(msg.prompt) }));
+      if (msg.type === "room" && msg.status === "siding") queueMicrotask(() => dispatch({ type: "side_deck", deck: sided }));
     });
-    lobby.handle(session, { type: "hello", name: "Integration Player", kind: "human" });
-    lobby.handle(session, { type: "create_room", vsAI: true, aiLevel: "normal", format: "unlimited", match: "match", deck });
-    await vi.waitFor(() => expect(session.room).toBeDefined());
-    const room = session.room!;
-    await room.finished;
-    expect(messages.filter(msg => msg.type === "error")).toEqual([]);
-    expect(room.status).toBe("done");
-    expect(room.score).toEqual([0, 2]);
-    expect(room.game).toBe(2);
-    expect(createdDecks).toEqual([[deck, deck], [sided, deck]]);
-    const boundaries = messages.flatMap(msg => msg.type === "room" && (msg.status === "siding" || msg.status === "done") ? [msg] : []);
-    expect(boundaries.map(msg => [msg.status, msg.game, msg.score])).toEqual([["siding", 1, [0, 1]], ["done", 2, [0, 2]]]);
-    expect(messages.flatMap(msg => msg.type === "events" ? msg.events.filter(event => event.t === "win") : [])).toHaveLength(2);
-    expect(new Set(messages.flatMap(msg => msg.type === "events" ? [msg.state.duelId] : [])).size).toBe(2);
+    try {
+      await lobby.handle(session, { type: "hello", name: "Integration Player", kind: "human" });
+      await lobby.handle(session, { type: "create_room", vsAI: true, aiLevel: "normal", format: "unlimited", match: "match", deck });
+      await vi.waitFor(() => expect(session.room).toBeDefined());
+      const room = session.room!;
+      await vi.waitFor(() => {
+        if (handlerError) throw handlerError;
+        expect(room.status).toBe("done");
+      }, { timeout: 50_000, interval: 10 });
+      await room.finished;
+      expect(handlerError).toBeUndefined();
+      expect(messages.filter(msg => msg.type === "error")).toEqual([]);
+      expect(room.status).toBe("done");
+      expect(room.score).toEqual([0, 2]);
+      expect(room.game).toBe(2);
+      expect(createdDecks).toEqual([[deck, deck], [sided, deck]]);
+      const boundaries = messages.flatMap(msg => msg.type === "room" && (msg.status === "siding" || msg.status === "done") ? [msg] : []);
+      expect(boundaries.map(msg => [msg.status, msg.game, msg.score])).toEqual([["siding", 1, [0, 1]], ["done", 2, [0, 2]]]);
+      expect(messages.flatMap(msg => msg.type === "events" ? msg.events.filter(event => event.t === "win") : [])).toHaveLength(2);
+      expect(new Set(messages.flatMap(msg => msg.type === "events" ? [msg.state.duelId] : [])).size).toBe(2);
+    } finally {
+      for (const room of lobby.rooms.values()) await room.close();
+      lobby.disconnect(session);
+    }
   }, 60_000);
 });

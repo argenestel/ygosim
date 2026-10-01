@@ -63,7 +63,7 @@ class MockCardDb implements CardDb {
     }
 
     if (q.type) {
-      const lowerType = q.type.toLowerCase();
+      const lowerType = q.type?.toLowerCase();
       results = results.filter(c => c.type.some(t => t.toLowerCase() === lowerType));
     }
 
@@ -122,5 +122,37 @@ describe("Card Browser API", () => {
     expect(card?.atk).toBe(3000);
     expect(card?.def).toBe(2500);
     expect(card?.race).toBe("Dragon");
+  });
+});
+
+describe("Card Browser HTTP pagination", () => {
+  const cards: CardData[] = Array.from({ length: 523 }, (_, i) => ({
+    code: i + 1, name: `Trap ${String(i).padStart(4, "0")}`, desc: "Test card",
+    imageUrl: "", type: ["Trap"], attribute: i % 2 ? "DARK" : "LIGHT", level: i % 2 ? 4 : 8,
+  }));
+  const db: CardDb = {
+    get: code => cards.find(card => card.code === code),
+    search: q => cards.filter(card => (!q.name || card.name.includes(q.name))
+      && (!q.type || card.type.some(type => type.toLowerCase() === q.type?.toLowerCase())))
+      .slice(0, q.limit ?? 50),
+  };
+
+  it("counts all matches and pages beyond the first 200 without gaps", async () => {
+    const { buildApi } = await import("../src/server.js");
+    const { Lobby } = await import("../src/lobby.js");
+    const app = buildApi(new Lobby(async () => { throw new Error("unused"); }), () => db, () => null, async () => db);
+    const codes: number[] = [];
+    for (let offset = 0; offset < cards.length; offset += 200) {
+      const response = await app.request(`/api/cards?kind=trap&offset=${offset}&limit=200`);
+      const body = await response.json();
+      expect(body.total).toBe(523);
+      codes.push(...body.cards.map((card: CardData) => card.code));
+    }
+    expect(codes).toEqual(cards.map(card => card.code));
+    const beyond = await (await app.request("/api/cards?kind=trap&offset=523")).json();
+    expect(beyond).toEqual({ total: 523, cards: [] });
+    const filtered = await (await app.request("/api/cards?kind=trap&attribute=LIGHT&level=8&offset=200&limit=100")).json();
+    expect(filtered.total).toBe(262);
+    expect(filtered.cards).toEqual(cards.filter(card => card.attribute === "LIGHT").slice(200, 300));
   });
 });

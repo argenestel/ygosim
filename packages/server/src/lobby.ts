@@ -34,10 +34,11 @@ export class Lobby {
     const engine = this.getEngine?.();
     if (engine) {
       // Engine is loaded: must wait for database and enforce validation
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
         const db = await Promise.race([
           this.getDbReady?.() ?? Promise.resolve(null),
-          new Promise<null>((_, reject) => setTimeout(() => reject(new Error("database load timeout")), 10000)),
+          new Promise<null>((_, reject) => (timer = setTimeout(() => reject(new Error("database load timeout")), 10000))),
         ]);
         if (!db) {
           return { ok: false, errors: ["card database loading, please retry"] };
@@ -47,6 +48,8 @@ export class Lobby {
         console.warn(`[lobby] engine validateDeck failed for format ${format}:`, e);
         // Never fall back to local check when engine is loaded - report error
         return { ok: false, errors: [`validation error: ${(e as Error).message}`] };
+      } finally {
+        clearTimeout(timer);
       }
     }
     // Engine not loaded: use local validation (format-agnostic)

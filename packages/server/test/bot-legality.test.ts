@@ -188,3 +188,36 @@ describe("Bot Legality", () => {
     expect(isLegal(prompt, { promptId: "p2", choose: ["a"] })).toBe(false); // wrong prompt ID
   });
 });
+
+it("selects summon materials instead of repeatedly canceling the summon", async () => {
+  const prompt: Prompt = {
+    promptId: "materials", kind: "select_card", text: "Select a material", min: 1, max: 1,
+    options: [
+      { id: "select:0", label: "Quickdraw Synchron", card: {
+        uid: "material", code: 20932152, owner: 0, controller: 0, location: "mzone",
+        sequence: 0, position: "atk", atk: 700,
+      } },
+      { id: "cancel", label: "Cancel selection" },
+    ],
+  };
+  const action = await createBot("normal").choose(mockState, prompt);
+  expect(action.choose).toEqual(["select:0"]);
+});
+
+it("continues selecting materials and finishes instead of undoing the selection", async () => {
+  const card = (uid: string, atk: number) => ({
+    uid, code: 1, owner: 0 as const, controller: 0 as const, location: "mzone" as const,
+    sequence: 0, position: "atk" as const, atk,
+  });
+  const prompt: Prompt = {
+    promptId: "materials", kind: "select_card", text: "Select or unselect", min: 1, max: 1,
+    options: [
+      { id: "select:0", label: "Quillbolt Hedgehog", card: card("next", 800) },
+      { id: "unselect:0", label: "Quickdraw Synchron", card: card("previous", 700) },
+    ],
+  };
+  const bot = createBot("normal");
+  expect((await bot.choose(mockState, prompt)).choose).toEqual(["select:0"]);
+  prompt.options.push({ id: "finish", label: "Finish selection" });
+  expect((await bot.choose(mockState, prompt)).choose).toEqual(["finish"]);
+});
