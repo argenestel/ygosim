@@ -24,6 +24,8 @@ function context(): PromptContext {
     db,
     strings: { system: new Map(), victory: new Map(), counter: new Map([[7, "Spell Counters"]]), setname: new Map() },
     promptId: "p1",
+    cardByCode: code => ({ uid: `position:${code}`, code, owner: 0, controller: 0,
+      location: "mzone", sequence: 0, position: "faceup" }),
     card: (loc) => ({
       uid: `${loc.controller}:${loc.location}:${loc.sequence}`,
       code: loc.code, owner: loc.controller, controller: loc.controller,

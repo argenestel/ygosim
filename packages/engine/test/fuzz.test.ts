@@ -1,9 +1,61 @@
 import { describe, expect, it } from "vitest";
-import type { Duel, Prompt } from "@ygosim/protocol";
-import { loadCardDb } from "../src/carddb.js";
+import type { CardRef, Duel, DuelState, Prompt } from "@ygosim/protocol";
+import { loadCardDb, type SqlCardDb } from "../src/carddb.js";
 import { validateDeck } from "../src/formats.js";
 import { createDuel } from "../src/index.js";
 import { choices, deckGenerator, respondRandomly, rng, tcgCard } from "../scripts/fuzz-support.js";
+
+function allStateCards(state: DuelState): CardRef[] {
+  const walk = (cards: readonly CardRef[]): CardRef[] => cards.flatMap(card => [card, ...(card.overlays ? walk(card.overlays) : [])]);
+  return walk([...state.cards, ...state.chain.map(chain => chain.card)]);
+}
+
+function matchingStateCard(state: DuelState, promptCard: CardRef): CardRef | undefined {
+  const cards = allStateCards(state);
+  return cards.find(card => card.uid === promptCard.uid)
+    ?? cards.find(card => card.controller === promptCard.controller && card.location === promptCard.location && card.sequence === promptCard.sequence);
+}
+
+function expectPromptCardVisibleAsState(state: DuelState, promptCard: CardRef, context: string, corresponding?: CardRef): void {
+  const stateCard = corresponding ?? matchingStateCard(state, promptCard);
+  expect(stateCard, `${context}: prompt card ${promptCard.uid} is absent from stateFor(${state.you})`).toBeDefined();
+  if (!stateCard) return;
+
+  if (stateCard.code === undefined) {
+    expect(promptCard.code, `${context}: hidden prompt card leaked code`).toBeUndefined();
+    expect(promptCard.atk, `${context}: hidden prompt card leaked ATK`).toBeUndefined();
+    expect(promptCard.def, `${context}: hidden prompt card leaked DEF`).toBeUndefined();
+    expect(promptCard.level, `${context}: hidden prompt card leaked level`).toBeUndefined();
+    expect(promptCard.counters, `${context}: hidden prompt card leaked counters`).toBeUndefined();
+    expect(promptCard.overlays, `${context}: hidden prompt card leaked overlay identities`).toBeUndefined();
+    return;
+  }
+
+  expect(promptCard.code, `${context}: visible prompt card changed code`).toBe(stateCard.code);
+  for (const [index, overlay] of (promptCard.overlays ?? []).entries()) {
+    const stateOverlay = stateCard.overlays?.find(candidate => candidate.uid === overlay.uid)
+      ?? stateCard.overlays?.[index];
+    expect(stateOverlay, `${context}: prompt overlay ${index} is absent from stateFor(${state.you})`).toBeDefined();
+    if (stateOverlay) expectPromptCardVisibleAsState(state, overlay, `${context}/overlay[${index}]`, stateOverlay);
+  }
+}
+
+function expectPromptCardsRedacted(duel: Duel, pending: NonNullable<Awaited<ReturnType<Duel["step"]>>["pending"]>, db: SqlCardDb): void {
+  const state = duel.stateFor(pending.player);
+  const otherState = duel.stateFor((pending.player ^ 1) as 0 | 1);
+  for (const [index, option] of pending.prompt.options.entries()) {
+    if (!option.card) continue;
+    const context = `${pending.prompt.kind} option ${index} (${option.id})`;
+    const stateCard = matchingStateCard(state, option.card);
+    if (stateCard?.code === undefined) {
+      const otherCard = matchingStateCard(otherState, option.card);
+      if (otherCard?.code !== undefined) {
+        expect(option.label.toLocaleLowerCase()).not.toContain(db.name(otherCard.code).toLocaleLowerCase());
+      }
+    }
+    expectPromptCardVisibleAsState(state, option.card, context);
+  }
+}
 
 describe("fuzz harness", () => {
   it.each([[20261002, 379], [20261077, 167], [20261176, 84], [20261183, 5]])(
@@ -33,6 +85,31 @@ describe("fuzz harness", () => {
       }
     } finally { duel.destroy(); }
   });
+
+  it("never exposes hidden prompt card identities across seeded random duels", async () => {
+    const db = await loadCardDb(), generate = deckGenerator(db);
+    const seeds = [0, 1, 17, 42, 20261002, 20261077, 20261176, 20261183];
+    const decisionCap = 400;
+    let decisionsChecked = 0;
+    for (const firstPlayer of [0, 1] as const) for (const seed of seeds) {
+      const random = rng(seed);
+      const duel = await createDuel({ decks: [generate(random), generate(random)], format: "tcg", seed, firstPlayer });
+      try {
+        let result = await duel.step();
+        for (let decision = 0; !result.ended && decision < decisionCap; decision++) {
+          expect(result.pending, `seed ${seed}, first player ${firstPlayer}: missing pending prompt`).toBeDefined();
+          if (!result.pending) break;
+          expectPromptCardsRedacted(duel, result.pending, db);
+          respondRandomly(duel, result.pending, random);
+          decisionsChecked++;
+          result = await duel.step();
+        }
+      } finally {
+        duel.destroy();
+      }
+    }
+    expect(decisionsChecked, "seeded fuzz should inspect hundreds of decisions").toBeGreaterThan(500);
+  }, 30_000);
 
   it("generates reproducible decks that pass TCG validation from released TCG cards", async () => {
     const db = await loadCardDb(), generate = deckGenerator(db);

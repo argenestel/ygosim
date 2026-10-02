@@ -1,5 +1,5 @@
 import type { Action, Duel, DuelOptions as ProtocolDuelOptions, FormatId, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
-import { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle, type OcgMessage } from "ocgcore-wasm";
 import { loadCardDb, toOcgCard, type SqlCardDb } from "./carddb.js";
 import { loadStrings, makeScriptReader } from "./data.js";
 import { translatePrompt } from "./prompts.js";
@@ -112,6 +112,7 @@ class WasmDuel implements Duel {
     if (this.pending) return { events: [], pending: { player: this.tracker.player(this.pending.player), prompt: structuredClone(this.pending.prompt) } };
     if (this.tracker.ended) return { events: [], ended: { ...this.tracker.ended } };
     const events: StepResult["events"] = [];
+    const messages: OcgMessage[] = [];
     const handle = this.handle!;
     for (let i = 0; i < 10000; i++) {
       const status = this.core.duelProcess(handle);
@@ -119,11 +120,22 @@ class WasmDuel implements Duel {
       for (const message of this.core.duelGetMessage(handle)) {
         if (message.type === OcgMessageType.RETRY) throw new Error("ocgcore rejected the validated response");
         events.push(...this.tracker.ingest(message));
-        const pending = translatePrompt(message, { db: this.db, strings: loadStrings(), card: loc => this.tracker.promptCard(loc, "player" in message ? message.player : 0), promptId: `${this.tracker.duelId}:${++this.promptSerial}` });
-        if (pending) { if (this.pending) throw new Error("Multiple simultaneous core prompts"); this.pending = pending; }
+        messages.push(message);
       }
       if (status === OcgProcessResult.CONTINUE && !this.tracker.ended) continue;
       this.tracker.refresh(this.core, handle);
+      // Query visibility before rendering decisions so prompts and stateFor
+      // use the same current positions and public-card flags.
+      for (const message of messages) {
+        const asker = "player" in message ? message.player : 0;
+        const pending = translatePrompt(message, {
+          db: this.db, strings: loadStrings(), viewer: this.tracker.player(asker),
+          card: loc => this.tracker.promptCard(loc, asker),
+          cardByCode: code => this.tracker.promptCardByCode(code, asker),
+          promptId: `${this.tracker.duelId}:${++this.promptSerial}`,
+        });
+        if (pending) { if (this.pending) throw new Error("Multiple simultaneous core prompts"); this.pending = pending; }
+      }
       const ended = this.ending();
       if (ended) return { events, ended: { ...ended } };
       if (status === OcgProcessResult.END) throw new Error("Core ended without a victory message");

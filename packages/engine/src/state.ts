@@ -166,9 +166,9 @@ export class DuelTracker {
       case M.CHAIN_END: this.chain = []; return [];
       case M.ATTACK: return [{ t: "attack", attacker: this.card(m.card), ...(m.target ? { target: this.card(m.target) } : {}) }];
       case M.DAMAGE: case M.PAY_LPCOST: case M.RECOVER: {
-        const p = this.player(m.player); const recovering = m.type === M.RECOVER;
+        const p = this.player(m.player); const recovering = m.type === M.RECOVER; const paying = m.type === M.PAY_LPCOST;
         this.lp[p] = Math.max(0, this.lp[p] + (recovering ? m.amount : -m.amount));
-        return [{ t: recovering ? "recover" : "damage", player: p, amount: m.amount, lp: this.lp[p] }];
+        return [{ t: recovering ? "recover" : paying ? "pay_lp" : "damage", player: p, amount: m.amount, lp: this.lp[p] }];
       }
       case M.LPUPDATE: {
         const p = this.player(m.player), delta = m.lp - this.lp[p]; this.lp[p] = m.lp;
@@ -251,17 +251,15 @@ export class DuelTracker {
     return out;
   }
   promptCard(loc: OcgCardLoc, player: number): CardRef {
-    const c = this.card(loc);
-    const out = this.redact(c, this.player(player));
-    // The core explicitly supplies identities the deciding player may inspect.
-    // A zero code is an unknown opponent card, even though the server knows it.
-    if (loc.code) {
-      out.code = loc.code & 0x7fffffff;
-      out.position = normalizedPosition(c, true);
-    } else {
-      delete out.code; delete out.atk; delete out.def; delete out.level; delete out.counters; delete out.overlays;
-    }
-    return out;
+    // A nonzero core prompt code is not permission to reveal a hidden card.
+    return this.redact(this.card(loc), this.player(player));
+  }
+  promptCardByCode(code: number, player: number): CardRef | undefined {
+    const candidates = [...this.cards.values()].filter(c => c.code === (code & 0x7fffffff));
+    const cards = candidates.map(c => this.redact(c, this.player(player)));
+    // Code-only decisions provide no instance location. Fail closed when the
+    // identity could refer to a hidden copy, or the instance is not tracked.
+    return cards.length === 1 || (cards.length && cards.every(c => c.code !== undefined)) ? cards[0] : undefined;
   }
   stateFor(viewer: PlayerIdx): DuelState {
     return { duelId: this.duelId, turn: this.turn, turnPlayer: this.turnPlayer, phase: this.phase, lp: [...this.lp], cards: [...this.cards.values()].map(c => this.redact(c, viewer)), chain: this.chain.map(c => ({ card: this.redact(c.card, viewer, true), desc: c.desc })), you: viewer };

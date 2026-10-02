@@ -15,7 +15,7 @@ describe("viewer privacy and state translation", () => {
     expect(state.cards.filter(c => c.location === "hand" || c.location === "deck" || c.position === "facedown_def").every(c => c.code === undefined)).toBe(true);
     expect(state.cards.find(c => c.position === "atk")?.code).toBe(89631139);
     expect(tracker.promptCard(loc(1, L.HAND, 0, 0), 0).code).toBeUndefined();
-    expect(tracker.promptCard(loc(0, L.DECK, 0), 0).code).toBe(89631139);
+    expect(tracker.promptCard(loc(0, L.DECK, 0), 0).code).toBeUndefined();
   });
   it("does not leak the source of a move or draw and preserves physical card identity", () => {
     const tracker = make();
@@ -102,7 +102,8 @@ describe("viewer privacy and state translation", () => {
     expect(card(0, "fzone", 0).position).toBe("facedown");
     expect(card(0, "pzone", 0).position).toBe("facedown_def");
 
-    expect(tracker.promptCard(loc(1, L.HAND, 2, 114, 8), 0)).toMatchObject({code: 114, position: "faceup"});
+    expect(tracker.promptCard(loc(1, L.HAND, 2, 114, 8), 0)).toMatchObject({position: "facedown"});
+    expect(tracker.promptCard(loc(1, L.HAND, 2, 114, 8), 0).code).toBeUndefined();
     const hiddenPrompt = tracker.promptCard(loc(1, L.HAND, 3, 0, 8), 0);
     expect(hiddenPrompt.position).toBe("facedown");
     expect(hiddenPrompt.code).toBeUndefined();
