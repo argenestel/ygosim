@@ -77,6 +77,25 @@ JSON reports go to `packages/engine/data/reports/` (gitignored). In installation
 where `npx tsx` cannot find the workspace's transitive TSX binary, add
 `../../node_modules/.pnpm/node_modules/.bin` to `PATH` from `packages/engine`.
 
+## Initial deck shuffling
+
+This core has no duel flag that shuffles decks at startup. In the archived
+sources, `OCG_DuelNewCard` (`ocgapi.cpp`) appends main-deck cards supplied with
+sequence 0. `Processors::Startup` (`field.cpp`) clears the shuffle checks and
+draws immediately from the back of that list. `DUEL_PSEUDO_SHUFFLE`, exposed as
+`OcgDuelMode.PSEUDO_SHUFFLE`, disables shuffling inside `field::shuffle`; it
+does not request an initial shuffle and must remain unset.
+
+The TypeScript wrapper therefore applies Fisher–Yates to both main decks before
+insertion. A private xoshiro256** stream uses a copy of the same four 64-bit
+seed words passed to the core, advancing between players in protocol player
+order. Rejection sampling removes modulo bias in shuffle indices. Numeric
+seeds retain the existing SplitMix64 expansion; omitted seeds use 32 bytes from
+Node's `crypto.randomBytes`, generated once for both the core and wrapper.
+The core's RNG state and Extra Deck order are preserved. Seeded gameplay is
+reproducible, but opening hands intentionally differ from versions that inserted
+the supplied main-deck list without shuffling.
+
 ## Verification on October 2, 2026
 
 - Vitest: **120 passed**, 12 test files. TypeScript and no-unused lint passed.

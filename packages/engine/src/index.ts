@@ -1,4 +1,3 @@
-import { randomBytes } from "node:crypto";
 import type { Action, Duel, DuelOptions as ProtocolDuelOptions, FormatId, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
 import { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
 import { loadCardDb, toOcgCard, type SqlCardDb } from "./carddb.js";
@@ -8,6 +7,7 @@ import { DuelTracker } from "./state.js";
 import { adaptResponse } from "./response.js";
 import { listFormats, validateDeck } from "./formats.js";
 import { createCompatibleCore } from "./core.js";
+import { createDeckShuffler, seeds } from "./shuffle.js";
 
 export { loadCardDb } from "./carddb.js";
 export { parseYdk } from "./ydk.js";
@@ -25,15 +25,6 @@ export interface DuelOptions extends ProtocolDuelOptions {
 let sharedCore: Promise<OcgCoreSync> | undefined;
 function coreModule() {
   return sharedCore ??= createCompatibleCore().catch(error => { sharedCore = undefined; throw error; });
-}
-function seeds(seed?: number): [bigint, bigint, bigint, bigint] {
-  if (seed === undefined) { const b = randomBytes(32); return [0, 8, 16, 24].map(i => b.readBigUInt64LE(i)) as [bigint, bigint, bigint, bigint]; }
-  let x = BigInt(seed); const mask = (1n << 64n) - 1n;
-  return [0, 1, 2, 3].map(() => {
-    x = (x + 0x9e3779b97f4a7c15n) & mask;
-    let z = x; z = ((z ^ (z >> 30n)) * 0xbf58476d1ce4e5b9n) & mask; z = ((z ^ (z >> 27n)) * 0x94d049bb133111ebn) & mask;
-    return z ^ (z >> 31n);
-  }) as [bigint, bigint, bigint, bigint];
 }
 function validate(opts: DuelOptions, db: SqlCardDb) {
   if (opts.seed !== undefined && !Number.isSafeInteger(opts.seed)) throw new Error("seed must be a safe integer");
@@ -82,7 +73,12 @@ class WasmDuel implements Duel {
     if (this.opts.format === "speed") flags |= OcgDuelMode.MODE_SPEED;
     const format = this.opts.format === undefined ? undefined : listFormats().find(format => format.id === this.opts.format);
     const team = { startingLP: this.opts.startingLp ?? 8000, startingDrawCount: format?.startingHand ?? 5, drawCountPerTurn: format?.drawPerTurn ?? 1 };
-    const h = this.core.createDuel({ flags, seed: seeds(this.opts.seed), team1: team, team2: team,
+    const seed = seeds(this.opts.seed);
+    // Startup draws immediately; the core has no initial-shuffle flag.
+    // PSEUDO_SHUFFLE disables later core shuffles, so leave it unset and
+    // shuffle here using a private copy of the same seed material.
+    const shuffle = createDeckShuffler(seed);
+    const h = this.core.createDuel({ flags, seed, team1: team, team2: team,
       // The core also looks up virtual names (for example Legendary Dragon
       // Timaeus) and code 0. Missing optional data is represented by null;
       // actual deck passcodes have already been checked by validate().
@@ -99,7 +95,7 @@ class WasmDuel implements Duel {
       for (const player of [0, 1] as const) {
         const team = (player ^ this.first) as PlayerIdx;
         const deck = this.opts.decks[player];
-        for (const [location, cards] of [[OcgLocation.DECK, deck.main], [OcgLocation.EXTRA, deck.extra]] as const) for (const code of cards) {
+        for (const [location, cards] of [[OcgLocation.DECK, shuffle(deck.main)], [OcgLocation.EXTRA, deck.extra]] as const) for (const code of cards) {
           this.core.duelNewCard(h, { team, duelist: 0, controller: team, code, location, sequence: 0, position: OcgPosition.FACEDOWN_DEFENSE });
         }
       }

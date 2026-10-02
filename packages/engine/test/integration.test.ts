@@ -170,12 +170,31 @@ describe("engine integration", () => {
     }
     expect(Math.max(...copies.values())).toBeLessThanOrEqual(3);
 
-    const seed = 42;
-    const duel = await createDuel({ decks: [fixture, decks()[1]], seed, firstPlayer: 0, chooseFirstTurn: false });
+    // Find a reproducible opening that contains the main-deck combo pieces
+    // from the actual shuffled draw. This keeps the fixture independent of
+    // the order in which cards happen to be listed in the .ydk file.
+    const requiredOpening = [1845204, 74093656];
+    let selected: { duel: Awaited<ReturnType<typeof createDuel>>; result: StepResult; seed: number } | undefined;
+    for (let seed = 0; seed < 512 && !selected; seed++) {
+      const candidate = await createDuel({ decks: [fixture, decks()[1]], seed, firstPlayer: 0, chooseFirstTurn: false });
+      try {
+        const result = await candidate.step();
+        const opening = result.events
+          .filter((event): event is Extract<DuelEvent, { t: "draw" }> => event.t === "draw" && event.player === 0)
+          .flatMap(event => event.cards.map(card => card.code));
+        if (requiredOpening.every(code => opening.includes(code))) selected = { duel: candidate, result, seed };
+        else candidate.destroy();
+      } catch (error) {
+        candidate.destroy();
+        throw error;
+      }
+    }
+    if (!selected) throw new Error("could not find a shuffled opening containing the fixture combo");
+    const { duel, result: firstResult, seed } = selected;
     const summons: Extract<DuelEvent, { t: "summon" }>[] = [];
     const random = rng(seed);
     try {
-      let result = await duel.step();
+      let result = firstResult;
       let decisions = 0;
       while (true) {
         for (const event of result.events) {
@@ -184,7 +203,6 @@ describe("engine integration", () => {
         if (result.ended || decisions++ >= 2_500) break;
         if (!result.pending) throw new Error("engine returned neither a prompt nor an ending");
         const { player, prompt } = result.pending;
-        // The core draws from the end of the fixture in its supplied order.
         // Build the opening combo before handing the rest of the duel to the
         // seeded legal-response driver used by the vanilla integration tests.
         const combo = player === 0 && !summons.some(event => event.kind === "synchro") && prompt.kind === "idle"
@@ -192,7 +210,11 @@ describe("engine integration", () => {
             ?? prompt.options.find(option => option.id.startsWith("summon:") && option.card?.code === 74093656)
             ?? prompt.options.find(option => option.id.startsWith("activate:") && option.card?.code === 1845204)
           : undefined;
+        const pass = !summons.some(event => event.kind === "synchro") && prompt.kind === "select_chain"
+          ? prompt.options.find(option => option.id === "pass:")
+          : undefined;
         if (combo) duel.respond(player, { promptId: prompt.promptId, choose: [combo.id] });
+        else if (pass) duel.respond(player, { promptId: prompt.promptId, choose: [pass.id] });
         else respondRandomly(duel, result.pending, random);
         result = await duel.step();
       }
