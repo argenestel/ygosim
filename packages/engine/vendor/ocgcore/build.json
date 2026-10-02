@@ -1,0 +1,16 @@
+{
+  "core": "efc21aa433b88cd35b7c37db4072a35c58d9d435",
+  "lua": "6e22fedb74cf0c9b6656e9fce8b7331db847c605",
+  "wrapper": "9f36452f2a2464f057f7fd6e2273aa5ab589401e",
+  "image": "emscripten/emsdk:4.0.9",
+  "patches": [
+    "synchronous Node loader",
+    "upstream 3c7d293 card-data offsets"
+  ],
+  "sha256": {
+    "ocgcore.sync.wasm": "604b998460366f43f9c1a244009549165d13e160dff9bcaaf8a6ed588754d0cc",
+    "ocgcore.sync.mjs": "71ff89cb5ae1fbb72a77fd97ecf407b0d507417ace27ea894fe4611be8011f60",
+    "index.mjs": "697d31cd9f58ae158bccefb84e87a0bfd45bb3e33b406e39367ac294259b2c72",
+    "source.tar.gz": "1f96786d81cafa3f383466f3bc7f63f699e0fad30a84a3259315fbf695656c24"
+  }
+}

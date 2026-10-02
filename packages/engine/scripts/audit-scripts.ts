@@ -1,7 +1,8 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import createCore, { OcgDuelMode, OcgLocation, OcgLogType, OcgPosition, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { OcgDuelMode, OcgLocation, OcgLogType, OcgPosition, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { createCompatibleCore } from "../src/core.js";
 import { loadCardDb, toOcgCard, type RawCard, type SqlCardDb } from "../src/carddb.js";
 import { makeScriptReader } from "../src/data.js";
 
@@ -184,7 +185,7 @@ export async function runAudit(options: CliOptions): Promise<ScriptAuditReport> 
     }
   }
 
-  const core = await createCore({ sync: true });
+  const core = await createCompatibleCore();
   const loadErrors: AuditLoadError[] = [];
   for (let offset = 0; offset < targets.length; offset += options.batchSize) {
     loadBatch(core, db, targets.slice(offset, offset + options.batchSize), readScript, loadErrors);

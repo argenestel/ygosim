@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import createCore, { OcgDuelMode, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, OcgQueryFlags, OcgResponseType } from "ocgcore-wasm";
+import { OcgDuelMode, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, OcgQueryFlags, OcgResponseType } from "ocgcore-wasm";
+import { createCompatibleCore } from "../src/core.js";
 import { loadCardDb, toOcgCard } from "../src/carddb.js";
 import { makeScriptReader } from "../src/data.js";
 import { adaptResponse } from "../src/response.js";
@@ -35,7 +36,7 @@ describe("adaptResponse", () => {
 
   it("accepts an adapted sort permutation in the real core", async () => {
     const db = await loadCardDb();
-    const core = await createCore({ sync: true });
+    const core = await createCompatibleCore();
     const errors: string[] = [];
     const handle = core.createDuel({
       flags: OcgDuelMode.MODE_MR5,

@@ -1,4 +1,5 @@
-import createCore, { OcgMessageType, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { OcgMessageType, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import createCore from "../vendor/ocgcore/index.mjs";
 
 /** The Emscripten object captured by ocgcore-wasm's runtime callback. */
 interface NativeModule {
@@ -160,8 +161,8 @@ function captureRaw(module: NativeModule, getter: NativeModule["_ocgapiDuelGetMe
 }
 
 /**
- * Initialize the synchronous core with a local compatibility shim for the
- * message decoder in ocgcore-wasm 0.1.2.
+ * Initialize the vendored synchronous core with a local compatibility shim
+ * for the retained message decoder from ocgcore-wasm 0.1.2.
  */
 export async function createCompatibleCore(options: Record<string, unknown> = {}): Promise<OcgCoreSync> {
   let module: NativeModule | undefined;

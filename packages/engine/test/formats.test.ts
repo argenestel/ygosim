@@ -11,8 +11,8 @@ import { getBanlist, listFormats, validateDeck } from "../src/formats.js";
 import { parseYdk } from "../src/ydk.js";
 
 const coreCalls = vi.hoisted(() => [] as OcgDuelOptionsSync[]);
-vi.mock("ocgcore-wasm", async importOriginal => {
-  const actual = await importOriginal<typeof import("ocgcore-wasm")>();
+vi.mock("../vendor/ocgcore/index.mjs", async importOriginal => {
+  const actual = await importOriginal<typeof import("../vendor/ocgcore/index.mjs")>();
   return { ...actual, default: async () => {
     const core = await actual.default({ sync: true });
     return { ...core, createDuel: (options: OcgDuelOptionsSync) => {
