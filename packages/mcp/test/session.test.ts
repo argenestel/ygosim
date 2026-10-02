@@ -14,14 +14,14 @@ const prompt: Prompt = { promptId: "prompt1", kind: "idle", text: "Choose an act
 const deck = { main: [card.code], extra: [], side: [] };
 
 let http: Server, wss: WebSocketServer, peer: WebSocket, session: Session;
-let searchCards: CardData[], banlistAvailable: boolean;
+let searchCards: CardData[], banlist: Record<number, 0 | 1 | 2>, banlistAvailable: boolean;
 let messages: ClientMsg[], requests: string[], autoPrompt: boolean, rejection: boolean, httpStatus: number;
 function send(msg: ServerMsg) { peer.send(JSON.stringify(msg)); }
 function call(tool: string, args: object = {}) { return handleLine(session, JSON.stringify({ id: 1, tool, args })) as Promise<{ id: number; ok: boolean; text?: string; error?: string }>; }
 async function flush() { await new Promise((resolve) => setTimeout(resolve, 20)); }
 
 beforeEach(async () => {
-  searchCards = [card]; banlistAvailable = true;
+  searchCards = [card]; banlist = { 1: 0, 2: 1, 3: 2 }; banlistAvailable = true;
   messages = []; requests = []; autoPrompt = true; rejection = false; httpStatus = 200;
   http = createServer((req, res) => {
     requests.push(req.url!);
@@ -38,7 +38,7 @@ beforeEach(async () => {
     }
     if (req.url === "/api/banlist/tcg") {
       if (!banlistAvailable) { res.statusCode = 503; return res.end("{}"); }
-      return res.end(JSON.stringify({ 1: 0, 2: 1, 3: 2 }));
+      return res.end(JSON.stringify(banlist));
     }
     if (req.url === `/api/cards/${card.code}`) return res.end(JSON.stringify(card));
     res.statusCode = 404; res.end("{}");
@@ -245,8 +245,23 @@ describe("card_info deck-building query", () => {
     const result = await call("card_info", { query: "draw two cards" });
     expect(result.ok).toBe(true);
     expect(result.text!.split("\n")).toHaveLength(40);
-    expect(result.text).toContain("TCG unknown");
+    expect(result.text).toContain("TCG status unknown");
     expect(requests).toContain("/api/cards?q=draw%20two%20cards&limit=40");
+  });
+  it("reports the TCG status for forbidden and limited real cards", async () => {
+    banlist = { 55144522: 0, 85115440: 0, 78872731: 1, 24224830: 1 };
+    searchCards = [
+      { ...card, code: 55144522, name: "Pot of Greed", desc: "status marker" },
+      { ...card, code: 85115440, name: "Zoodiac Broadbull", desc: "status marker" },
+      { ...card, code: 78872731, name: "Zoodiac Ratpier", desc: "status marker" },
+      { ...card, code: 24224830, name: "Called by the Grave", desc: "status marker" },
+    ];
+    const result = await call("card_info", { query: "status marker" });
+    expect(result.ok).toBe(true);
+    expect(result.text).toContain("55144522 | Pot of Greed | Monster/Normal | Level/Rank 8 / ATK 3000 | TCG Forbidden");
+    expect(result.text).toContain("85115440 | Zoodiac Broadbull | Monster/Normal | Level/Rank 8 / ATK 3000 | TCG Forbidden");
+    expect(result.text).toContain("78872731 | Zoodiac Ratpier | Monster/Normal | Level/Rank 8 / ATK 3000 | TCG Limited");
+    expect(result.text).toContain("24224830 | Called by the Grave | Monster/Normal | Level/Rank 8 / ATK 3000 | TCG Limited");
   });
   it("keeps name lookups at five full-text results and passcodes unchanged", async () => {
     const result = await call("card_info", { name: "HERO" });

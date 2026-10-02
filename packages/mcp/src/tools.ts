@@ -155,7 +155,9 @@ export class Session {
             if (!list.length) return "No card found.";
             return list.slice(0, limit).map(d => {
               const stats = [d.level !== undefined ? `Level/Rank ${d.level}` : "", d.atk !== undefined ? `ATK ${d.atk}` : ""].filter(Boolean).join(" / ");
-              const status = banlist ? (["Forbidden", "Limited", "Semi-Limited"][banlist[d.code]] ?? "Unlimited") : "unknown";
+              const status = banlist
+                ? (["Forbidden", "Limited", "Semi-Limited"][banlist[d.code]] ?? "Unlimited")
+                : "status unknown";
               return `${d.code} | ${d.name.replace(/\s+/g, " ")} | ${d.type.join("/")}${stats ? ` | ${stats}` : ""} | TCG ${status}`;
             }).join("\n");
           }

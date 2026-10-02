@@ -100,6 +100,17 @@ describe("spectator privacy", () => {
     expect(spectatorEvents(duel, [privateHint, publicHint])).toEqual([publicHint]);
   });
 
+  it("preserves public LP costs for either player without labeling them as damage", () => {
+    const duel = new PrivateMockDuel([deck, deck]);
+    const events: DuelEvent[] = [
+      { t: "pay_lp", player: 0, amount: 300, lp: 7700 },
+      { t: "pay_lp", player: 1, amount: 1000, lp: 7000 },
+    ];
+    const result = spectatorEvents(duel, events);
+    expect(result).toEqual(events);
+    expect(result[0]).not.toBe(events[0]);
+  });
+
   it("redacts the final snapshot when a player surrenders", async () => {
     const messages: ServerMsg[] = [];
     const room = new Room(async () => new PrivateMockDuel([deck, deck]));

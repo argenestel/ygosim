@@ -127,7 +127,7 @@ export function buildApi(
     if (!engine) return c.json({ error: "engine not available" }, 503);
     try {
       const banlist = await engine.getBanlist(format);
-      return banlist ? c.json(banlist) : c.json({ error: "format not found" }, 404);
+      return banlist ? c.json(Object.fromEntries(banlist)) : c.json({ error: "format not found" }, 404);
     } catch (e) {
       console.warn("[api] getBanlist failed:", e);
       return c.json({ error: "banlist unavailable" }, 503);

@@ -40,6 +40,8 @@ export function spectatorEvents(duel: Duel, events: DuelEvent[]): DuelEvent[] {
       case "summon": return { ...e, card: cardForSpectator(e.card, e.kind === "set") };
       case "activate": case "pos_change": return { ...e, card: cardForSpectator(e.card) };
       case "attack": return { ...e, attacker: cardForSpectator(e.attacker), ...(e.target ? { target: cardForSpectator(e.target) } : {}) };
+      // LP changes are public; retain costs as pay_lp rather than damage.
+      case "damage": case "recover": case "pay_lp": return { ...e };
       default: return { ...e };
     }
   });

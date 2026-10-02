@@ -44,7 +44,7 @@ function useTween(target: number, ms = 700) {
   return v;
 }
 
-function LpBar({ name, lp, mine, active, hits }: { name: string; lp: number; mine: boolean; active: boolean; hits: { id: number; amount: number; heal: boolean }[] }) {
+function LpBar({ name, lp, mine, active, hits }: { name: string; lp: number; mine: boolean; active: boolean; hits: { id: number; amount: number; heal: boolean; cost?: boolean }[] }) {
   const shown = useTween(lp);
   return (
     <div className={`lp ${mine ? "me" : "op"}${active ? " active" : ""}`}>
@@ -53,8 +53,8 @@ function LpBar({ name, lp, mine, active, hits }: { name: string; lp: number; min
       <div className="lp-track"><div className="lp-fill" style={{ width: `${Math.max(0, Math.min(1, shown / 8000)) * 100}%` }} /></div>
       <AnimatePresence>
         {hits.map((h) => (
-          <motion.div key={h.id} className={`lp-pop${h.heal ? " heal" : ""}`} initial={{ opacity: 0, y: 0, scale: 0.6 }} animate={{ opacity: 1, y: mine ? -46 : 46, scale: 1.2 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
-            {h.heal ? "+" : "−"}{h.amount}
+          <motion.div key={h.id} className={`lp-pop${h.heal ? " heal" : h.cost ? " cost" : ""}`} initial={{ opacity: 0, y: 0, scale: 0.6 }} animate={{ opacity: 1, y: mine ? -46 : 46, scale: 1.2 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
+            {h.heal ? "+" : "−"}{h.amount}{h.cost && <small> cost</small>}
           </motion.div>
         ))}
       </AnimatePresence>
@@ -138,7 +138,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     (window as unknown as { __ygosim?: unknown }).__ygosim = { prompt, state, busy: view.busy, submit: (ids: string[]) => prompt && respond(prompt.promptId, ids) };
   }, [prompt, state, view.busy, respond]);
 
-  const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover" }] : []);
+  const hits = (p: PlayerIdx) => fx.flatMap((f) => (f.ev.t === "damage" || f.ev.t === "recover" || f.ev.t === "pay_lp") && f.ev.player === p ? [{ id: f.id, amount: f.ev.amount, heal: f.ev.t === "recover", cost: f.ev.t === "pay_lp" }] : []);
   // select_place: map "place:<player>:<location>:<seq>" options onto board zones so they can be clicked.
   const places: PlaceTarget[] = useMemo(() => {
     if (!prompt || !state || prompt.kind !== "select_place") return [];

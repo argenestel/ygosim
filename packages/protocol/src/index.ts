@@ -63,6 +63,7 @@ export type DuelEvent =
   | { t: "attack"; attacker: CardRef; target?: CardRef }
   | { t: "damage"; player: PlayerIdx; amount: number; lp: number }
   | { t: "recover"; player: PlayerIdx; amount: number; lp: number }
+  | { t: "pay_lp"; player: PlayerIdx; amount: number; lp: number }   // LP paid as a cost (not damage)
   | { t: "phase"; phase: DuelState["phase"]; turnPlayer: PlayerIdx }
   | { t: "new_turn"; turn: number; turnPlayer: PlayerIdx }
   | { t: "shuffle"; player: PlayerIdx; location: Location }

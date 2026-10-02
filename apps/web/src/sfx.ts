@@ -79,6 +79,7 @@ export function playEvent(e: DuelEvent, you: number) {
       case "chain_solved": tone(1320, 0.12, { gain: 0.08 }); break;
       case "attack": noise(0.45, { gain: 0.3, from: 400, to: 3000, q: 0.8 }); tone(70, 0.5, { gain: 0.5, slide: 0.6, delay: 0.35 }); break;
       case "damage": tone(e.player === you ? 120 : 220, 0.5, { type: "sawtooth", gain: 0.18, slide: 0.5 }); break;
+      case "pay_lp": tone(520, 0.18, { type: "triangle", gain: 0.08, slide: 0.8 }); break;
       case "recover": chord([784, 988, 1175], 0.5, "sine", 0.1); break;
       case "new_turn": chord(e.turnPlayer === you ? [392, 523, 659] : [330, 392, 494], 0.6, "triangle", 0.12); break;
       case "phase": tone(880, 0.06, { gain: 0.05 }); break;

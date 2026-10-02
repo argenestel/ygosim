@@ -56,7 +56,7 @@ export function applyEvent(s: DuelState, e: DuelEvent): DuelState {
   switch (e.t) {
     case "draw": return { ...s, cards: e.cards.reduce(upsert, s.cards) };
     case "move": case "summon": case "pos_change": return { ...s, cards: upsert(s.cards, e.card) };
-    case "damage": case "recover": {
+    case "damage": case "recover": case "pay_lp": {
       const lp = [...s.lp] as [number, number]; lp[e.player] = e.lp; return { ...s, lp };
     }
     case "phase": return { ...s, phase: e.phase, turnPlayer: e.turnPlayer };
@@ -80,6 +80,7 @@ export function durationOf(e: DuelEvent): number {
     case "attack": return 950;
     case "damage": return 900;
     case "recover": return 700;
+    case "pay_lp": return 550;
     case "phase": return 650;
     case "new_turn": return 1300;
     case "shuffle": return 450;

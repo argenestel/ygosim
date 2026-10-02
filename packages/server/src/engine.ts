@@ -5,7 +5,7 @@ export interface EngineApi {
   loadCardDb(): Promise<CardDb>;
   parseYdk(text: string): Deck;
   listFormats(): Promise<Format[]>;
-  getBanlist(format: FormatId): Promise<Record<number, 0 | 1 | 2> | null>;
+  getBanlist(format: FormatId): Map<number, 0 | 1 | 2> | null | Promise<Map<number, 0 | 1 | 2> | null>;
   validateDeck(deck: Deck, format: FormatId, db: CardDb): Promise<{ ok: boolean; errors: string[] }>;
 }
 

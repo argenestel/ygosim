@@ -78,6 +78,7 @@ export function renderEvent(e: DuelEvent, you: PlayerIdx, cards: CardCache): str
     case "attack": return `${n(e.attacker)} (${who(e.attacker.controller, you)}) attacks ${e.target ? n(e.target) : "directly"}`;
     case "damage": return `${who(e.player, you)} took ${e.amount} damage -> LP ${e.lp}`;
     case "recover": return `${who(e.player, you)} gained ${e.amount} LP -> ${e.lp}`;
+    case "pay_lp": return `${who(e.player, you)} paid ${e.amount} LP (cost) → ${e.lp}`;
     case "phase": return null; // shown in header; too noisy
     case "new_turn": return `--- Turn ${e.turn} (${who(e.turnPlayer, you)}) ---`;
     case "shuffle": return null;
