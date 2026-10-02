@@ -1,12 +1,13 @@
 import { randomBytes } from "node:crypto";
 import type { Action, Duel, DuelOptions as ProtocolDuelOptions, FormatId, PlayerIdx, Prompt, StepResult } from "@ygosim/protocol";
-import createCore, { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { OcgDuelMode, OcgLogType, OcgLocation, OcgMessageType, OcgPosition, OcgProcessResult, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
 import { loadCardDb, toOcgCard, type SqlCardDb } from "./carddb.js";
 import { loadStrings, makeScriptReader } from "./data.js";
 import { translatePrompt } from "./prompts.js";
 import { DuelTracker } from "./state.js";
 import { adaptResponse } from "./response.js";
 import { listFormats, validateDeck } from "./formats.js";
+import { createCompatibleCore } from "./core.js";
 
 export { loadCardDb } from "./carddb.js";
 export { parseYdk } from "./ydk.js";
@@ -23,7 +24,7 @@ export interface DuelOptions extends ProtocolDuelOptions {
 
 let sharedCore: Promise<OcgCoreSync> | undefined;
 function coreModule() {
-  return sharedCore ??= createCore({ sync: true }).catch(error => { sharedCore = undefined; throw error; });
+  return sharedCore ??= createCompatibleCore().catch(error => { sharedCore = undefined; throw error; });
 }
 function seeds(seed?: number): [bigint, bigint, bigint, bigint] {
   if (seed === undefined) { const b = randomBytes(32); return [0, 8, 16, 24].map(i => b.readBigUInt64LE(i)) as [bigint, bigint, bigint, bigint]; }
@@ -82,7 +83,10 @@ class WasmDuel implements Duel {
     const format = this.opts.format === undefined ? undefined : listFormats().find(format => format.id === this.opts.format);
     const team = { startingLP: this.opts.startingLp ?? 8000, startingDrawCount: format?.startingHand ?? 5, drawCountPerTurn: format?.drawPerTurn ?? 1 };
     const h = this.core.createDuel({ flags, seed: seeds(this.opts.seed), team1: team, team2: team,
-      cardReader: code => { const c = this.db.raw.get(code); if (!c) { this.failures.push(`Missing card data: ${code}`); return null; } return toOcgCard(c); },
+      // The core also looks up virtual names (for example Legendary Dragon
+      // Timaeus) and code 0. Missing optional data is represented by null;
+      // actual deck passcodes have already been checked by validate().
+      cardReader: code => { const c = this.db.raw.get(code); return c ? toOcgCard(c) : null; },
       scriptReader: readScript,
       errorHandler: (type, message) => { if (type === OcgLogType.ERROR) this.failures.push(message); },
     });
