@@ -417,3 +417,4 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .top-tools .chain-mode.on { color: var(--cyan); border-color: rgba(92, 200, 242, 0.5); }
 .top-tools .chain-mode.off { color: #ff9b95; border-color: rgba(229, 83, 75, 0.45); }
 .top-tools .chain-mode.auto { color: var(--gold-hi); border-color: rgba(214, 177, 94, 0.45); }
+.chain-targets { font-style: normal; font-size: 0.7rem; color: var(--gold-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }

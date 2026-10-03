@@ -22,8 +22,22 @@ function ChainEntry({ link, n, you, top }: { link: Link; n: number; you: PlayerI
       <div className="chain-text">
         <b>{data?.name ?? "Set card"}</b>
         <span>{link.desc || data?.desc?.slice(0, 120) || ""}</span>
+        {link.targets && link.targets.length > 0 && <Targets cards={link.targets} />}
       </div>
     </motion.div>
+  );
+}
+
+function TargetName({ code }: { code?: number }) {
+  const d = useCardData(code);
+  return <>{code === undefined ? "a set card" : d?.name ?? `#${code}`}</>;
+}
+
+function Targets({ cards }: { cards: NonNullable<Link["targets"]> }) {
+  return (
+    <em className="chain-targets">
+      → {cards.map((c, i) => <span key={c.uid}>{i > 0 && ", "}<TargetName code={c.code} /></span>)}
+    </em>
   );
 }
 

@@ -175,7 +175,7 @@ function CardDetail({ code, count, limit, isCover, onAdd, onSide, onRemove, onCo
       <div className="art"><img src={artUrl(code)} alt={c?.name ?? ""} /></div>
       <h3>{c?.name ?? "…"}</h3>
       {c && <div className="meta">{c.type.join(" / ")}{c.attribute && ` · ${c.attribute}`}{c.race && ` · ${c.race}`}{c.level !== undefined && ` · ${c.type.includes("Xyz") ? "Rank" : c.linkMarkers ? "Link" : "Lv"} ${c.level}`}</div>}
-      {c?.atk !== undefined && <div className="stats">ATK {c.atk}{c.def !== undefined && !c.linkMarkers ? ` / DEF ${c.def}` : ""}</div>}
+      {c && c.type.includes("Monster") && (c.atk !== undefined || c.atkUnknown) && <div className="stats">ATK {c.atkUnknown ? "?" : c.atk}{!c.linkMarkers && (c.def !== undefined || c.defUnknown) ? ` / DEF ${c.defUnknown ? "?" : c.def}` : ""}</div>}
       <div className="actions">
         <button onClick={onAdd} disabled={count >= limit}>+ Add</button>
         <button onClick={onSide} disabled={count >= limit}>+ Side</button>

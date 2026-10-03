@@ -31,7 +31,7 @@ export function Inspector({ code }: { code?: number }) {
           {d.linkMarkers && <> · LINK-{d.linkMarkers.length}</>}
         </div>
       )}
-      {d?.atk !== undefined && <div className="insp-stats">ATK {d.atk}{d.def !== undefined && !d.linkMarkers ? ` / DEF ${d.def}` : ""}</div>}
+      {d && d.type.includes("Monster") && (d.atk !== undefined || d.atkUnknown) && <div className="insp-stats">ATK {d.atkUnknown ? "?" : d.atk}{!d.linkMarkers && (d.def !== undefined || d.defUnknown) ? ` / DEF ${d.defUnknown ? "?" : d.def}` : ""}</div>}
       <p className="insp-desc">{d?.desc}</p>
     </aside>
   );
