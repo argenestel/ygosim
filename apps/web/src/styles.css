@@ -448,3 +448,6 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .log-toggle { top: 138px; }
 .duel-log { top: 178px; }
 @media (max-width: 760px) { .hand-bar { height: 150px; } .lp-counts { display: none; } .lp.me { bottom: auto; top: 150px; } }
+.room-row { display: grid; grid-template-columns: 76px 1fr auto auto auto; gap: 8px; align-items: center; padding: 8px 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); }
+.room-row button { padding: 6px 12px; font-size: 0.82rem; }
+.spectate-flag { position: absolute; z-index: 30; right: 18px; bottom: 22px; padding: 8px 14px; border-radius: 99px; background: rgba(10, 14, 22, 0.9); border: 1px solid var(--line-2); color: var(--dim); font-size: 0.82rem; font-weight: 600; }

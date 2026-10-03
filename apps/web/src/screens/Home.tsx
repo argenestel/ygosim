@@ -90,9 +90,12 @@ function OnlineRooms({ onClose, onPlay, onCreate }: { onClose: () => void; onPla
         <span>Open rooms</span>
         {open.length === 0 && <small>No open rooms right now.</small>}
         {open.map((r) => (
-          <button key={r.roomId} className="row" style={{ justifyContent: "space-between" }} onClick={() => onPlay({ mode: "join", roomId: r.roomId })}>
-            <b>{r.roomId}</b><span className="muted">{r.players.join(" vs ")}</span><span className="chip">{r.format ?? "tcg"}{r.match === "match" ? " · Bo3" : ""}</span>
-          </button>
+          <div key={r.roomId} className="room-row">
+            <b>{r.roomId}</b><span className="muted">{r.players.join(" vs ") || "—"}</span>
+            <span className="chip">{r.format ?? "tcg"}{r.match === "match" ? " · Bo3" : ""}</span>
+            <button onClick={() => onPlay({ mode: "spectate", roomId: r.roomId })}>Watch</button>
+            <button className="primary" onClick={() => onPlay({ mode: "join", roomId: r.roomId })}>Join &amp; duel</button>
+          </div>
         ))}
       </div>
       {live.length > 0 && (

@@ -250,7 +250,9 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
             Chain: {chainMode === "auto" ? "Auto" : chainMode === "on" ? "On" : "Off"}
           </button>
           <button title={muted ? "Unmute" : "Mute"} onClick={() => { setMuted(!muted); setMute(!muted); }}>{muted ? "🔇" : "🔊"}</button>
-          <button className="danger" onClick={() => send({ type: "surrender" })}>Surrender</button>
+          {spectating
+            ? <button className="ghost" onClick={onExit}>Leave</button>
+            : <button className="danger" onClick={() => send({ type: "surrender" })}>Surrender</button>}
         </div>
       </div>
 
@@ -277,7 +279,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         )}
       </AnimatePresence>
 
-      {prompt && !view.result && (
+      {spectating && <div className="spectate-flag">Spectating · hands hidden</div>}
+      {prompt && !view.result && !spectating && (
         <PromptPanel prompt={prompt} selected={selected} toggle={toggle} submit={submit} />
       )}
       {!prompt && !view.result && view.busy && <div className="opp-thinking">…</div>}
