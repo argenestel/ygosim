@@ -392,3 +392,25 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .demo-flag { position: absolute; z-index: 40; top: 54px; left: 50%; transform: translateX(-50%); padding: 6px 14px; border-radius: 99px; background: rgba(229, 83, 75, 0.15); border: 1px solid rgba(229, 83, 75, 0.5); color: #ffb4ae; font-size: 0.8rem; font-weight: 600; pointer-events: none; }
 .lp-pop.cost { color: var(--gold-hi); text-shadow: 0 2px 0 #000, 0 0 14px rgba(214, 177, 94, 0.6); font-size: 1.5rem; }
 .lp-pop small { font-size: 0.7rem; letter-spacing: 0.12em; text-transform: uppercase; margin-left: 4px; opacity: 0.8; }
+
+/* ---------- Duel log ---------- */
+.log-toggle { position: absolute; z-index: 21; left: 16px; top: 112px; padding: 6px 12px; font-size: 0.76rem; font-family: var(--head); letter-spacing: 0.1em; background: rgba(10, 14, 22, 0.88); }
+.duel-log { position: absolute; z-index: 45; left: 16px; top: 150px; bottom: 120px; width: 340px; display: flex; flex-direction: column; background: rgba(10, 14, 22, 0.96); border: 1px solid var(--line-2); border-radius: 12px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.55); backdrop-filter: blur(8px); animation: pop 0.15s ease-out; }
+.duel-log header { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.duel-log header b { font-family: var(--head); letter-spacing: 0.08em; margin-right: auto; }
+.duel-log header .seg button { padding: 4px 8px; font-size: 0.72rem; }
+.duel-log ol { list-style: none; margin: 0; padding: 6px 0; overflow: auto; flex: 1; font-size: 0.8rem; }
+.duel-log li { display: flex; gap: 8px; align-items: baseline; padding: 4px 12px; line-height: 1.4; }
+.duel-log li:empty { display: none; }
+.duel-log li.turn { padding-top: 10px; }
+.log-turn { color: var(--gold); font-family: var(--head); letter-spacing: 0.08em; font-size: 0.74rem; }
+.log-card { color: var(--text); }
+.log-hidden { color: var(--faint); }
+.log-dim { color: var(--faint); }
+.log-chain { font-style: normal; font-size: 0.68rem; color: #1b1405; background: var(--gold); border-radius: 4px; padding: 0 4px; }
+.log-dmg { color: #ff8a84; }
+.log-heal { color: #6fe3a9; }
+.log-cost { color: var(--gold-hi); }
+.log-lp { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; font-size: 0.72rem; white-space: nowrap; }
+@media (max-width: 760px) { .duel-log { width: calc(100vw - 32px); } }
+@media (max-width: 1180px) { .top-tools { top: 54px; } .chain-panel { top: 56%; } }

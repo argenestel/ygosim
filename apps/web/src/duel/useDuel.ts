@@ -5,6 +5,8 @@ import { playEvent } from "../sfx";
 
 export interface Fx { id: number; ev: DuelEvent; }
 
+export interface LogEntry { id: number; turn: number; ev: DuelEvent; lp: [number, number]; }
+
 export interface View {
   roomId?: string;
   roomStatus?: string;
@@ -21,6 +23,8 @@ export interface View {
   result?: { winner: number | null; reason: string };
   chat: { from: string; text: string }[];
   agents: Partial<Record<number, { agent: string; status: string; detail?: string }>>;
+  /** Retained duel log (most recent last), so plays can be reviewed after their animation. */
+  log: LogEntry[];
   error?: string;
   fatalError?: string;
   busy: boolean;              // animations playing
@@ -31,7 +35,8 @@ type Act =
   | { k: "state"; fn: (s: DuelState) => DuelState }
   | { k: "fx+"; fx: Fx } | { k: "fx-"; id: number }
   | { k: "chat"; from: string; text: string }
-  | { k: "agent"; seat: number; info: { agent: string; status: string; detail?: string } };
+  | { k: "agent"; seat: number; info: { agent: string; status: string; detail?: string } }
+  | { k: "log"; entry: LogEntry };
 
 function reducer(v: View, a: Act): View {
   switch (a.k) {
@@ -41,6 +46,7 @@ function reducer(v: View, a: Act): View {
     case "fx-": return { ...v, fx: v.fx.filter((f) => f.id !== a.id) };
     case "chat": return { ...v, chat: [...v.chat.slice(-50), { from: a.from, text: a.text }] };
     case "agent": return { ...v, agents: { ...v.agents, [a.seat]: a.info } };
+    case "log": return { ...v, log: [...v.log.slice(-399), a.entry] };
   }
 }
 
@@ -92,12 +98,13 @@ export function durationOf(e: DuelEvent): number {
 }
 
 export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: string) => void) => Conn) {
-  const [view, dispatch] = useReducer(reducer, { players: [], fx: [], shake: 0, chat: [], busy: false, agents: {} });
+  const [view, dispatch] = useReducer(reducer, { players: [], fx: [], shake: 0, chat: [], busy: false, agents: {}, log: [] });
   const conn = useRef<Conn | null>(null);
   const queue = useRef<{ events: DuelEvent[]; state: DuelState; prompt?: Prompt }[]>([]);
   const running = useRef(false);
   const speed = useRef(1);
   const fxId = useRef(1);
+  const logId = useRef(1);
   const stateRef = useRef<DuelState | undefined>(undefined);
   const gameRef = useRef<number | undefined>(undefined);
   const generation = useRef(0);
@@ -125,6 +132,10 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
         if (version !== generation.current) return;
         const fast = speed.current;
         if (stateRef.current) playEvent(e, stateRef.current.you);
+        if (stateRef.current && e.t !== "hint" && e.t !== "phase" && e.t !== "shuffle") {
+          const after = e.t === "win" ? stateRef.current : applyEvent(stateRef.current, e);
+          dispatch({ k: "log", entry: { id: logId.current++, turn: after.turn, ev: e, lp: [...after.lp] as [number, number] } });
+        }
         if (e.t === "win") { dispatch({ k: "set", patch: { result: { winner: e.winner, reason: e.reason } } }); continue; }
         if (e.t === "hint") continue;
         stateRef.current = applyEvent(stateRef.current, e);

@@ -12,6 +12,7 @@ import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
 import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
 import { SideDeck } from "./SideDeck";
+import { DuelLog } from "./DuelLog";
 import { ChainCallout, ChainPanel } from "./ChainPanel";
 import { AgentWaiting } from "./AgentWaiting";
 import { useDuel } from "./useDuel";
@@ -233,6 +234,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
       <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} />
 
+      <DuelLog log={view.log} you={you} names={view.players} />
       <ChainPanel chain={chainNow} you={you} />
       <AnimatePresence>
         {lastActivate && <ChainCallout key={lastActivate.id} id={lastActivate.id} n={lastActivate.n} code={lastActivate.code} mine={lastActivate.mine} />}
