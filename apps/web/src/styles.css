@@ -414,3 +414,6 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .log-lp { margin-left: auto; color: var(--dim); font-variant-numeric: tabular-nums; font-size: 0.72rem; white-space: nowrap; }
 @media (max-width: 760px) { .duel-log { width: calc(100vw - 32px); } }
 @media (max-width: 1180px) { .top-tools { top: 54px; } .chain-panel { top: 56%; } }
+.top-tools .chain-mode.on { color: var(--cyan); border-color: rgba(92, 200, 242, 0.5); }
+.top-tools .chain-mode.off { color: #ff9b95; border-color: rgba(229, 83, 75, 0.45); }
+.top-tools .chain-mode.auto { color: var(--gold-hi); border-color: rgba(214, 177, 94, 0.45); }

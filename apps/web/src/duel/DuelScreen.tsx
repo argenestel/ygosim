@@ -91,7 +91,16 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const [speed, setSpd] = useState(1);
   const [chatText, setChatText] = useState("");
   const [muted, setMute] = useState(isMuted());
-  const [autoPass, setAutoPass] = useState(() => { try { return localStorage.getItem("ygosim.autopass") !== "0"; } catch { return true; } });
+  // EDOPro-style chain policy: auto = skip empty windows, on = always stop, off = pass optional windows.
+  type ChainMode = "auto" | "on" | "off";
+  const [chainMode, setChainMode] = useState<ChainMode>(() => {
+    try { const v = localStorage.getItem("ygosim.chainmode"); return v === "on" || v === "off" ? v : localStorage.getItem("ygosim.autopass") === "0" ? "on" : "auto"; } catch { return "auto"; }
+  });
+  const cycleChainMode = () => {
+    const next: ChainMode = chainMode === "auto" ? "on" : chainMode === "on" ? "off" : "auto";
+    setChainMode(next);
+    try { localStorage.setItem("ygosim.chainmode", next); } catch {}
+  };
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -103,15 +112,16 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
   useEffect(() => { setSelected([]); setMenu(null); }, [prompt?.promptId]);
 
-  // Like Master Duel's auto-chain: skip chain windows where passing is the only choice.
+  // Chain policy: "auto" skips windows where passing is the only choice; "off" passes every
+  // optional window (a forced chain, min >= 1, always stops); "on" always stops.
   useEffect(() => {
-    if (view.fatalError || !autoPass || !prompt || prompt.kind !== "select_chain") return;
-    if (prompt.options.some((o) => o.card)) return;
-    const pass = prompt.options[0];
-    if (!pass) return;
+    if (view.fatalError || chainMode === "on" || !prompt || prompt.kind !== "select_chain") return;
+    const pass = prompt.options.find((o) => !o.card);
+    if (!pass || (prompt.min ?? 0) > 0) return;
+    if (chainMode === "auto" && prompt.options.some((o) => o.card)) return;
     const t = setTimeout(() => respond(prompt.promptId, [pass.id]), 120);
     return () => clearTimeout(t);
-  }, [prompt, autoPass, respond, view.fatalError]);
+  }, [prompt, chainMode, respond, view.fatalError]);
 
   // uid -> options that reference that card
   const byCard = useMemo(() => {
@@ -219,8 +229,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         </div>
         <div className="top-tools">
           {[1, 2, 4].map((s) => <button key={s} className={speed === s ? "on" : ""} onClick={() => { setSpd(s); setSpeed(s); }}>{s}×</button>)}
-          <button className={autoPass ? "on" : ""} title="Automatically pass chain windows where you have nothing to activate"
-            onClick={() => { const v = !autoPass; setAutoPass(v); try { localStorage.setItem("ygosim.autopass", v ? "1" : "0"); } catch {} }}>Auto-pass</button>
+          <button className={`chain-mode ${chainMode}`} onClick={cycleChainMode}
+            title={chainMode === "auto" ? "Chain: Auto — stop only when you can respond (click for On)" : chainMode === "on" ? "Chain: On — stop at every chain window (click for Off)" : "Chain: Off — pass optional chain windows (click for Auto)"}>
+            Chain: {chainMode === "auto" ? "Auto" : chainMode === "on" ? "On" : "Off"}
+          </button>
           <button title={muted ? "Unmute" : "Mute"} onClick={() => { setMuted(!muted); setMute(!muted); }}>{muted ? "🔇" : "🔊"}</button>
           <button className="danger" onClick={() => send({ type: "surrender" })}>Surrender</button>
         </div>
