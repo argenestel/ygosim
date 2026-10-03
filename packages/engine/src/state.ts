@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { CardRef, DuelEvent, DuelState, Location, PlayerIdx } from "@ygosim/protocol";
 import { OcgLocation as L, OcgMessageType as M, OcgQueryFlags as Q, type OcgCardLoc, type OcgCoreSync, type OcgDuelHandle, type OcgLocPos, type OcgMessage, type OcgQueryFlags } from "ocgcore-wasm";
 import type { SqlCardDb } from "./carddb.js";
-import type { SystemStrings } from "./data.js";
+import { formatCoreText, type SystemStrings } from "./data.js";
 import type { SummonMetadata } from "./core.js";
 
 const zones = [L.DECK, L.HAND, L.MZONE, L.SZONE, L.GRAVE, L.REMOVED, L.EXTRA];
@@ -50,6 +50,7 @@ export class DuelTracker {
   private visibleDeckTop: [boolean, boolean] = [false, false];
   private aliases: [Map<string, string>, Map<string, string>] = [new Map(), new Map()];
   private revealed = new WeakMap<CardRef, number>();
+  private confirmed = new Map<string, number>();
   private hintAudience = new WeakMap<DuelEvent, number>();
   constructor(private db: SqlCardDb, private strings: SystemStrings, lp: number, private first: PlayerIdx, duelId: string = randomUUID()) { this.duelId = duelId; this.lp = [lp, lp]; this.turnPlayer = first; }
   player = (p: number): PlayerIdx => (p ^ this.first) as PlayerIdx;
@@ -96,6 +97,7 @@ export class DuelTracker {
     const source = { ...from, controller: from.controller < 2 ? from.controller : to.controller };
     const old = this.card({ ...source, code });
     this.cards.delete(key(source));
+    this.confirmed.delete(old.uid);
     // Ordered piles compact when a card leaves; field slots do not.
     if ([L.DECK, L.HAND, L.GRAVE, L.REMOVED, L.EXTRA].includes(from.location as 1)) {
       const shifts = [...this.cards.entries()].filter(([k, c]) => k.startsWith(`${from.controller}:${from.location}:`) && c.sequence > from.sequence);
@@ -158,8 +160,19 @@ export class DuelTracker {
       case M.POS_CHANGE: return [{ t: "pos_change", card: this.card(m) }];
       case M.CHAINING: {
         const c = this.card(m); this.revealed.set(c, 3);
-        this.chain.push({ card: c, desc: this.db.effectString(m.description) ?? this.strings.system.get(Number(m.description)) ?? this.db.name(m.code) });
+        this.chain.push({ card: c, desc: formatCoreText(this.db.effectString(m.description) ?? this.strings.system.get(Number(m.description)) ?? this.db.name(m.code), this.db.name(m.code)) });
         return [{ t: "activate", card: c, chainLink: m.chain_size }];
+      }
+      case M.BECOME_TARGET: {
+        const link = this.chain.at(-1);
+        if (link) {
+          link.targets ??= [];
+          for (const loc of m.cards) {
+            const target = this.card(loc);
+            if (!link.targets.some(c => c.uid === target.uid)) link.targets.push(target);
+          }
+        }
+        return [];
       }
       case M.CHAIN_SOLVED: return [{ t: "chain_solved", chainLink: m.chain_size }];
       case M.CHAIN_END: this.chain = []; return [];
@@ -175,7 +188,7 @@ export class DuelTracker {
       }
       case M.SHUFFLE_DECK: case M.SHUFFLE_HAND: case M.SHUFFLE_EXTRA: {
         const zone = m.type === M.SHUFFLE_DECK ? "deck" : m.type === M.SHUFFLE_HAND ? "hand" : "extra";
-        for (const [k, c] of this.cards) if (c.controller === this.player(m.player) && c.location === zone && !(zone === "extra" && rawFaceUp(c.position))) this.cards.delete(k);
+        for (const [k, c] of this.cards) if (c.controller === this.player(m.player) && c.location === zone && !(zone === "extra" && rawFaceUp(c.position))) { this.cards.delete(k); this.confirmed.delete(c.uid); }
         return [{ t: "shuffle", player: this.player(m.player), location: zone }];
       }
       case M.REVERSE_DECK: {
@@ -198,6 +211,7 @@ export class DuelTracker {
       case M.SHUFFLE_SET_CARD: {
         const cards = m.cards.map(c => this.card(c.from));
         for (const c of m.cards) this.cards.delete(key(c.from));
+        for (const c of cards) this.confirmed.delete(c.uid);
         const players = new Set(cards.map(c => c.controller));
         return [...players].map(player => ({ t: "shuffle", player, location: location(m.location, 0) }));
       }
@@ -213,14 +227,14 @@ export class DuelTracker {
         return [];
       }
       case M.CONFIRM_CARDS: case M.CONFIRM_DECKTOP: case M.CONFIRM_EXTRATOP:
-        return m.cards.map(loc => { const c = this.card(loc); this.revealed.set(c, 1 << this.player(m.player)); return { t: "move", card: c, from: { location: c.location, sequence: c.sequence }, reason: "reveal" }; });
+        return m.cards.map(loc => { const c = this.card(loc); this.revealed.set(c, 1 << this.player(m.player)); this.confirmed.set(c.uid, (this.confirmed.get(c.uid) ?? 0) | (1 << this.player(m.player))); return { t: "move", card: c, from: { location: c.location, sequence: c.sequence }, reason: "reveal" }; });
       case M.WIN: this.ended = { winner: m.player < 2 ? this.player(m.player) : null, reason: this.strings.victory.get(m.reason) ?? `Core victory reason ${m.reason}` }; return [{ t: "win", ...this.ended }];
-      case M.SHOW_HINT: { const e: DuelEvent = { t: "hint", text: m.hint }; return [e]; }
+      case M.SHOW_HINT: { const e: DuelEvent = { t: "hint", text: formatCoreText(m.hint) }; return [e]; }
       case M.HINT: {
         // Choice hints may identify private cards. Deliver only to their recipient.
         const text = this.strings.system.get(Number(m.hint));
         if (!text) return [];
-        const e: DuelEvent = { t: "hint", text }; this.hintAudience.set(e, m.player < 2 ? 1 << this.player(m.player) : 3); return [e];
+        const e: DuelEvent = { t: "hint", text: formatCoreText(text) }; this.hintAudience.set(e, m.player < 2 ? 1 << this.player(m.player) : 3); return [e];
       }
       default: return [];
     }
@@ -250,8 +264,13 @@ export class DuelTracker {
     return out;
   }
   promptCard(loc: OcgCardLoc, player: number): CardRef {
-    // A nonzero core prompt code is not permission to reveal a hidden card.
-    return this.redact(this.card(loc), this.player(player));
+    const card = this.card(loc);
+    const viewer = this.player(player);
+    // The core offers these private cards to their controller to make a choice.
+    // This grants visibility for this option only, never for the whole Deck.
+    if ((card.controller === viewer && ["deck", "extra", "hand"].includes(card.location)) || ((this.confirmed.get(card.uid) ?? 0) & (1 << viewer))) return card;
+    // A nonzero core prompt code alone cannot reveal an opponent's hidden card.
+    return this.redact(card, viewer);
   }
   promptCardByCode(code: number, player: number): CardRef | undefined {
     const candidates = [...this.cards.values()].filter(c => c.code === (code & 0x7fffffff));
@@ -260,8 +279,12 @@ export class DuelTracker {
     // identity could refer to a hidden copy, or the instance is not tracked.
     return cards.length === 1 || (cards.length && cards.every(c => c.code !== undefined)) ? cards[0] : undefined;
   }
+  /** Redact only the chain when rendering a response prompt. */
+  chainFor(viewer: PlayerIdx): DuelState["chain"] {
+    return this.chain.map(c => ({ card: this.redact(c.card, viewer, true), desc: c.desc, ...(c.targets ? { targets: c.targets.map(target => ((this.confirmed.get(target.uid) ?? 0) & (1 << viewer)) ? clone(target) : this.redact(target, viewer)) } : {}) }));
+  }
   stateFor(viewer: PlayerIdx): DuelState {
-    return { duelId: this.duelId, turn: this.turn, turnPlayer: this.turnPlayer, phase: this.phase, lp: [...this.lp], cards: [...this.cards.values()].map(c => this.redact(c, viewer)), chain: this.chain.map(c => ({ card: this.redact(c.card, viewer, true), desc: c.desc })), you: viewer };
+    return { duelId: this.duelId, turn: this.turn, turnPlayer: this.turnPlayer, phase: this.phase, lp: [...this.lp], cards: [...this.cards.values()].map(c => this.redact(c, viewer)), chain: this.chainFor(viewer), you: viewer };
   }
   redactEvents(events: DuelEvent[], viewer: PlayerIdx): DuelEvent[] {
     return events.filter(e => !this.hintAudience.has(e) || ((this.hintAudience.get(e)! & (1 << viewer)) !== 0)).map(e => {

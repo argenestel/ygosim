@@ -54,6 +54,7 @@ export async function controlledDuel(cards: SetupCard[]) {
         for (const m of messages) {
           const asker = 'player' in m ? m.player : 0;
           const translated = translatePrompt(m, { db, strings: loadStrings(), viewer: asker as PlayerIdx,
+            chain: tracker.stateFor(asker as PlayerIdx).chain,
             card: loc => tracker.promptCard(loc, asker), cardByCode: code => tracker.promptCardByCode(code, asker), promptId: `controlled:${++serial}` });
           if (translated) { if (pending) throw new Error('multiple prompts'); pending = translated; }
         }

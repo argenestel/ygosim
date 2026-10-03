@@ -1,8 +1,19 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDuel, parseYdk } from "../src/index.js";
+import { DuelTracker } from "../src/state.js";
 const deck = () => parseYdk(readFileSync(new URL("./fixtures/vanilla-dragons.ydk", import.meta.url), "utf8"));
 describe("duel lifecycle", () => {
+  it("renders core prompts without building full state snapshots", async () => {
+    const d = deck();
+    const duel = await createDuel({ decks: [d, d], seed: 42 });
+    const snapshots = vi.spyOn(DuelTracker.prototype, "stateFor");
+    try {
+      const step = await duel.step();
+      expect(step.pending).toBeDefined();
+      expect(snapshots).not.toHaveBeenCalled();
+    } finally { snapshots.mockRestore(); duel.destroy(); }
+  });
   it("validates deck and creation settings before starting the core", async () => {
     const d = deck();
     await expect(createDuel({decks:[d,d], masterRule: 6})).rejects.toThrow("masterRule");

@@ -2,7 +2,7 @@ import { z } from "zod";
 import { CardCache } from "./cards.js";
 import { GameClient, type WaitResult } from "./client.js";
 import { fetchSampleDecks, resolveDeck } from "./deck.js";
-import { collectCodes, renderEvents, renderPrompt, renderState } from "./render.js";
+import { collectCodes, formatCardDataStats, formatStat, renderEvents, renderPrompt, renderState } from "./render.js";
 
 export interface Config { baseUrl: string; name: string }
 
@@ -154,7 +154,7 @@ export class Session {
             const [list, banlist] = await Promise.all([this.cards.search(a.query, limit), this.cards.tcgBanlist()]);
             if (!list.length) return "No card found.";
             return list.slice(0, limit).map(d => {
-              const stats = [d.level !== undefined ? `Level/Rank ${d.level}` : "", d.atk !== undefined ? `ATK ${d.atk}` : ""].filter(Boolean).join(" / ");
+              const stats = [d.level !== undefined ? `Level/Rank ${d.level}` : "", d.atk !== undefined || d.atkUnknown ? `ATK ${formatStat(d.atk, d.atkUnknown) ?? "?"}` : ""].filter(Boolean).join(" / ");
               const status = banlist
                 ? (["Forbidden", "Limited", "Semi-Limited"][banlist[d.code]] ?? "Unlimited")
                 : "status unknown";
@@ -165,7 +165,7 @@ export class Session {
           const list = a.code !== undefined ? [await this.cards.get(a.code)].filter((x) => !!x) : a.name ? (await this.cards.search(a.name)).slice(0, 5) : [];
           if (!list.length) return "No card found.";
           return list.map((d: any) => {
-            const st = [d.attribute, d.race, d.level !== undefined ? `Level/Rank ${d.level}` : "", d.atk !== undefined ? `ATK ${d.atk}${d.def !== undefined ? ` / DEF ${d.def}` : ""}` : "", d.linkMarkers?.length ? `Link arrows ${d.linkMarkers.join(",")}` : "", d.scale !== undefined ? `Scale ${d.scale}` : ""].filter(Boolean).join(" | ");
+            const st = [d.attribute, d.race, d.level !== undefined ? `Level/Rank ${d.level}` : "", formatCardDataStats(d), d.linkMarkers?.length ? `Link arrows ${d.linkMarkers.join(",")}` : "", d.scale !== undefined ? `Scale ${d.scale}` : ""].filter(Boolean).join(" | ");
             return `${d.name} (#${d.code}) [${d.type.join("/")}]${st ? `\n${st}` : ""}\n${d.desc}`;
           }).join("\n\n");
         },

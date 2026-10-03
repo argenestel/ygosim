@@ -5,7 +5,10 @@ import { sampleDecks } from "../src/decks.js";
 import { startServer } from "../src/server.js";
 
 it("connected MCP agents fill a reserved seat and finish a real duel", { skip: !process.env.YGOSIM_TEST_ENGINE, timeout: 60_000 }, async () => {
-  const server = await startServer({ port: 0, botDelayMs: 0, seed: 42 });
+  // These "agents" are in-process bots answering in microseconds, far faster than
+  // real LLM agents (~1 decision/s), so give them headroom over the production
+  // per-socket rate limit (30/s, burst 256) instead of loosening that limit.
+  const server = await startServer({ port: 0, botDelayMs: 0, seed: 42, messagesPerSecond: 2000, messageBurst: 2000 });
   const deck = sampleDecks().find(value => value.id === "blue-eyes-fusion")!.deck;
   const host = new GameClient(`ws://127.0.0.1:${server.port}/ws`, "Host");
   const opponent = new GameClient(`ws://127.0.0.1:${server.port}/ws`, "Connected agent");

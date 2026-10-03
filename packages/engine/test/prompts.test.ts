@@ -47,6 +47,21 @@ function translate(message: OcgMessage) {
 }
 
 describe("translatePrompt", () => {
+  it("formats card-name and location placeholders in trigger prompts", () => {
+    const ctx = context();
+    ctx.strings.system.set(221, 'Activate the Trigger Effect of "%ls" from [%ls]?');
+    ctx.strings.system.set(95, 'Use the effect of "%ls"?');
+    for (const description of [95n, 221n]) {
+      const p = translatePrompt({ type: OcgMessageType.SELECT_EFFECTYN, player: 0, ...loc(100), description }, ctx)!.prompt;
+      expect(p.text).toContain('"Alpha"');
+      expect(p.text).not.toContain("%ls");
+      if (description === 221n) expect(p.text).toContain("[Monster Zone]");
+    }
+    ctx.db.raw.get(100)!.strs[0] = 'Use "%ls" again?';
+    expect(translatePrompt({ type: OcgMessageType.SELECT_EFFECTYN, player: 0, ...loc(100), description: 100n << 20n }, ctx)!.prompt.text).toContain('Use "Alpha" again?');
+    expect(translatePrompt({ type: OcgMessageType.SELECT_YESNO, player: 0, description: 95n }, ctx)!.prompt.text).toBe('Use the effect of "?"?');
+  });
+
   it("shares weighted tribute validation and returns only authoritative legal candidates", () => {
     const translated = translate({
       type: OcgMessageType.SELECT_TRIBUTE, player: 0, can_cancel: true, min: 2, max: 2,

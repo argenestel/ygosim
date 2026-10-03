@@ -59,6 +59,42 @@ export interface SystemStrings {
   setname: Map<number, string>;
 }
 
+/** Values accepted by the printf-style strings shipped with ygopro-core. */
+export type CoreTextArgument = string | number | bigint | null | undefined;
+
+/**
+ * Formats a strings.conf/card-str value using the subset of printf used by
+ * ygopro-core.  `%ls` is the core's card-name placeholder; `%s`, `%d`, and
+ * `%X` are the other conversions present in the shipped strings.
+ * Missing values become `?`, so a prompt can never expose a raw `%ls` token.
+ * Both `formatCoreText(text, [args])` and `formatCoreText(text, ...args)` are
+ * accepted to keep existing engine call sites concise.
+ */
+export function formatCoreText(template: string, ...args: CoreTextArgument[]): string;
+export function formatCoreText(template: string, args: readonly CoreTextArgument[]): string;
+export function formatCoreText(template: string, ...input: (CoreTextArgument | readonly CoreTextArgument[])[]): string {
+  const args: readonly CoreTextArgument[] = input.length === 1 && Array.isArray(input[0])
+    ? input[0] as readonly CoreTextArgument[]
+    : input as CoreTextArgument[];
+  let index = 0;
+  return template.replace(/%(?:%|[-+0-9.#]*l?[sdXx]|[-+0-9.#]*l*[A-Za-z])/g, token => {
+    if (token === "%%") return "%";
+    if (!/^%[-+0-9.#]*l?[sdXx]$/.test(token)) return "?";
+    const value = args[index++];
+    if (value == null) return "?";
+    const conversion = token.at(-1)!;
+    if (conversion === "s") return String(value);
+    if (typeof value === "bigint") return conversion === "X" ? value.toString(16).toUpperCase() : value.toString(conversion === "x" ? 16 : 10);
+    const number = Number(value);
+    if (!Number.isFinite(number)) return "?";
+    if (conversion === "X" || conversion === "x") {
+      const hex = Math.trunc(number).toString(16);
+      return conversion === "X" ? hex.toUpperCase() : hex;
+    }
+    return String(Math.trunc(number));
+  });
+}
+
 const stringsCache = new Map<string, SystemStrings>();
 export function loadStrings(dir = dataDir()): SystemStrings {
   const root = resolve(dir);

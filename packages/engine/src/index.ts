@@ -126,10 +126,14 @@ class WasmDuel implements Duel {
       this.tracker.refresh(this.core, handle);
       // Query visibility before rendering decisions so prompts and stateFor
       // use the same current positions and public-card flags.
+      const tracker = this.tracker;
       for (const message of messages) {
         const asker = "player" in message ? message.player : 0;
         const pending = translatePrompt(message, {
           db: this.db, strings: loadStrings(), viewer: this.tracker.player(asker),
+          // Only response prompts need chain context; never redact the board
+          // for each non-prompt core message.
+          get chain() { return tracker.chainFor(tracker.player(asker)); },
           card: loc => this.tracker.promptCard(loc, asker),
           cardByCode: code => this.tracker.promptCardByCode(code, asker),
           promptId: `${this.tracker.duelId}:${++this.promptSerial}`,

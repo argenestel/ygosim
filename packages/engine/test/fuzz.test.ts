@@ -21,6 +21,12 @@ function expectPromptCardVisibleAsState(state: DuelState, promptCard: CardRef, c
   expect(stateCard, `${context}: prompt card ${promptCard.uid} is absent from stateFor(${state.you})`).toBeDefined();
   if (!stateCard) return;
 
+  // A core-offered own Deck choice grants identity for that option only.
+  if (promptCard.controller === state.you && promptCard.location === "deck") {
+    expect(promptCard.code, `${context}: own Deck option lost identity`).toBeDefined();
+    expect(stateCard.code, `${context}: state exposed the own Deck`).toBeUndefined();
+    return;
+  }
   if (stateCard.code === undefined) {
     expect(promptCard.code, `${context}: hidden prompt card leaked code`).toBeUndefined();
     expect(promptCard.atk, `${context}: hidden prompt card leaked ATK`).toBeUndefined();
@@ -40,14 +46,18 @@ function expectPromptCardVisibleAsState(state: DuelState, promptCard: CardRef, c
   }
 }
 
-function expectPromptCardsRedacted(duel: Duel, pending: NonNullable<Awaited<ReturnType<Duel["step"]>>["pending"]>, db: SqlCardDb): void {
+function expectPromptCardsRedacted(duel: Duel, pending: NonNullable<Awaited<ReturnType<Duel["step"]>>["pending"]>, db: SqlCardDb, revealed = new Map<string, CardRef>()): void {
   const state = duel.stateFor(pending.player);
   const otherState = duel.stateFor((pending.player ^ 1) as 0 | 1);
   for (const [index, option] of pending.prompt.options.entries()) {
     if (!option.card) continue;
+    if (revealed.has(option.card.uid)) {
+      expect(option.card.code).toBe(revealed.get(option.card.uid)!.code);
+      continue;
+    }
     const context = `${pending.prompt.kind} option ${index} (${option.id})`;
     const stateCard = matchingStateCard(state, option.card);
-    if (stateCard?.code === undefined) {
+    if (stateCard?.code === undefined && !(option.card.controller === state.you && option.card.location === "deck")) {
       const otherCard = matchingStateCard(otherState, option.card);
       if (otherCard?.code !== undefined) {
         expect(option.label.toLocaleLowerCase()).not.toContain(db.name(otherCard.code).toLocaleLowerCase());
@@ -95,11 +105,22 @@ describe("fuzz harness", () => {
       const random = rng(seed);
       const duel = await createDuel({ decks: [generate(random), generate(random)], format: "tcg", seed, firstPlayer });
       try {
+        const revealed = [new Map<string, CardRef>(), new Map<string, CardRef>()];
         let result = await duel.step();
         for (let decision = 0; !result.ended && decision < decisionCap; decision++) {
           expect(result.pending, `seed ${seed}, first player ${firstPlayer}: missing pending prompt`).toBeDefined();
           if (!result.pending) break;
-          expectPromptCardsRedacted(duel, result.pending, db);
+          for (const viewer of [0, 1] as const) {
+            for (const event of duel.redactEvents(result.events, viewer)) {
+              if (event.t === "shuffle") {
+                for (const [uid, card] of revealed[viewer]) if (card.controller === event.player && card.location === event.location) revealed[viewer].delete(uid);
+              } else if (event.t === "move") {
+                revealed[viewer].delete(event.card.uid);
+                if (event.reason === "reveal" && event.card.code) revealed[viewer].set(event.card.uid, event.card);
+              }
+            }
+          }
+          expectPromptCardsRedacted(duel, result.pending, db, revealed[result.pending.player]);
           respondRandomly(duel, result.pending, random);
           decisionsChecked++;
           result = await duel.step();

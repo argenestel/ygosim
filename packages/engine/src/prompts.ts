@@ -1,5 +1,6 @@
 import type {
   CardRef,
+  DuelState,
   PlayerIdx,
   Prompt,
   PromptOption,
@@ -25,15 +26,17 @@ import type {
   OcgResponse,
 } from "ocgcore-wasm";
 import { toOcgCard, type SqlCardDb } from "./carddb.js";
-import type { SystemStrings } from "./data.js";
+import { formatCoreText, type SystemStrings } from "./data.js";
 
 export interface PromptContext {
   db: SqlCardDb;
   strings: SystemStrings;
-  /** Returns a card already redacted for the deciding player. */
+  /** Returns a selectable card with visibility granted to the deciding player. */
   card: (loc: OcgCardLoc) => CardRef;
   cardByCode?: (code: number) => CardRef | undefined;
   viewer?: PlayerIdx;
+  /** Current chain, already redacted for the deciding player. */
+  chain?: DuelState["chain"];
   promptId: string;
 }
 
@@ -93,15 +96,17 @@ function bounded(value: number, floor = 0): number {
   return Number.isFinite(value) ? Math.max(floor, Math.trunc(value)) : floor;
 }
 
-function textForDescription(ctx: PromptContext, description: bigint | number, code?: number): string | undefined {
+function textForDescription(ctx: PromptContext, description: bigint | number, code?: number, loc?: OcgCardLoc): string | undefined {
   const raw = typeof description === "bigint" ? description : BigInt(description);
   const numeric = Number(raw);
+  const name = code === undefined ? undefined : ctx.db.name(code);
+  const format = (text: string) => formatCoreText(text, [name, loc ? locationLabel(loc.location) : undefined]);
   // Small values are system-string ids (for example 90 asks whether to use
   // an additional normal summon).  Check this before interpreting the value
   // as an encoded card effect id.
   if (Number.isSafeInteger(numeric)) {
     const system = ctx.strings.system.get(numeric);
-    if (system) return system;
+    if (system) return format(system);
   }
   const candidates: bigint[] = [raw];
   if (code !== undefined) {
@@ -114,7 +119,7 @@ function textForDescription(ctx: PromptContext, description: bigint | number, co
   for (const candidate of candidates) {
     try {
       const text = ctx.db.effectString(candidate);
-      if (text) return text;
+      if (text) return format(text);
     } catch {
       // A malformed description should still produce a readable fallback.
     }
@@ -122,15 +127,18 @@ function textForDescription(ctx: PromptContext, description: bigint | number, co
   return undefined;
 }
 
-function descriptionLabel(ctx: PromptContext, description: bigint | number, code?: number): string {
+function descriptionLabel(ctx: PromptContext, description: bigint | number, code?: number, loc?: OcgCardLoc): string {
   // Some yes/no messages identify a card only through its packed effect id.
   // Resolve that identity through the tracker before reading private text.
   const raw = BigInt(description);
   if (code === undefined && ctx.cardByCode && !ctx.strings.system.has(Number(raw))) {
     const effectCode = [Number(raw >> 20n), Number(raw >> 4n)].find(candidate => ctx.db.raw.has(candidate));
-    if (effectCode !== undefined && !ctx.cardByCode(effectCode)?.code) return "Effect";
+    if (effectCode !== undefined) {
+      if (!ctx.cardByCode(effectCode)?.code) return "Effect";
+      code = effectCode;
+    }
   }
-  return textForDescription(ctx, description, code) ?? "Effect";
+  return textForDescription(ctx, description, code, loc) ?? "Effect";
 }
 
 function locationLabel(location: number): string {
@@ -199,6 +207,13 @@ function prompt(
   min = 1,
   max = min,
 ): Prompt {
+  const chain = ["select_chain", "select_effect_yn", "select_yesno"].includes(kind) ? context.chain : undefined;
+  if (chain?.length) {
+    const label = (card: CardRef) => card.code ? context.db.name(card.code) : hiddenCardLabel(card, `${controllerLabel(card.controller, context.viewer ?? card.controller)} `);
+    text += " Chain: " + chain.map((link, index) =>
+      `${index + 1}. ${label(link.card)}${link.targets?.length ? `; targets: ${link.targets.map(label).join(", ")}` : ""}`,
+    ).join(" | ") + ".";
+  }
   return { promptId: context.promptId, kind, text, min, max, options };
 }
 
@@ -217,7 +232,7 @@ function cardOptions(ctx: PromptContext, cards: OcgCardLocPos[], asker: PlayerId
 function activeOptions(ctx: PromptContext, cards: OcgCardLocActive[], asker: PlayerIdx, action = "Activate", peers: OcgCardLoc[] = cards): PromptOption[] {
   return cards.map((loc, index) => {
     const rendered = actionCardLabel(ctx, loc, peers, asker);
-    const effect = rendered.card.code ? textForDescription(ctx, loc.description, rendered.card.code) : undefined;
+    const effect = rendered.card.code ? textForDescription(ctx, loc.description, rendered.card.code, loc) : undefined;
     return option(String(index), `${action} ${rendered.label}${effect ? `: ${effect}` : ""}`, rendered.card);
   });
 }
@@ -764,7 +779,7 @@ export function translatePrompt(message: OcgMessage, context: PromptContext): Tr
       if (playerId === undefined) return undefined;
       const rendered = cardLabel(context, message, playerId);
       const options = [option("yes", "Yes", rendered.card), option("no", "No", rendered.card)];
-      const p = prompt(context, "select_effect_yn", `${rendered.label}: ${rendered.card.code ? descriptionLabel(context, message.description, rendered.card.code) : "Effect"}`, options);
+      const p = prompt(context, "select_effect_yn", `${rendered.label}: ${rendered.card.code ? descriptionLabel(context, message.description, rendered.card.code, message) : "Effect"}`, options);
       return { player: playerId, prompt: p, respond: (ids) => {
         assertIds(ids, options, 1, 1);
         return { type: OcgResponseType.SELECT_EFFECTYN, yes: ids[0] === "yes" };
@@ -778,7 +793,7 @@ export function translatePrompt(message: OcgMessage, context: PromptContext): Tr
       const rendered = loc ? cardLabel(context, loc, playerId) : undefined;
       const options = [option("yes", "Yes", rendered?.card), option("no", "No", rendered?.card)];
       const description = rendered
-        ? rendered.card.code ? descriptionLabel(context, message.description, rendered.card.code) : "Effect"
+        ? rendered.card.code ? descriptionLabel(context, message.description, rendered.card.code, loc) : "Effect"
         : descriptionLabel(context, message.description);
       const p = prompt(context, "select_yesno", rendered ? `${rendered.label}: ${description}` : description, options);
       return { player: playerId, prompt: p, respond: (ids) => {

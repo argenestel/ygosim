@@ -45,9 +45,14 @@ export function toCardData(r: RawCard): CardData {
     d.attribute = one(r.attribute, ATTR_NAMES);
     d.race = one(r.race, RACE_NAMES);
     d.level = r.level & 0xff;
-    d.atk = r.atk;
+    // BabelCDB uses -2 for printed “?” values. Keep that sentinel in the
+    // raw/core representation, but omit it from the public card data so
+    // consumers can distinguish an unknown stat from a numeric value.
+    if (r.atk >= 0) d.atk = r.atk;
+    else d.atkUnknown = true;
     if (isLink) d.linkMarkers = flags(r.def, LINK_NAMES);
-    else d.def = r.def;
+    else if (r.def >= 0) d.def = r.def;
+    else d.defUnknown = true;
     if (r.type & 0x1000000) d.scale = (r.level >> 24) & 0xff;
   }
   return d;

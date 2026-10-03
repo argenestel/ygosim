@@ -1,11 +1,27 @@
-import type { CardRef, DuelEvent, DuelState, Location, PlayerIdx, Prompt } from "@ygosim/protocol";
+import type { CardData, CardRef, DuelEvent, DuelState, Location, PlayerIdx, Prompt } from "@ygosim/protocol";
 import type { CardCache } from "./cards.js";
+
+/** Format the database's legacy -2 sentinel (printed “?”) for human output. */
+export function formatStat(value: number | undefined, unknown = false): string | undefined {
+  if (unknown || value === -2) return "?";
+  return value === undefined ? undefined : String(value);
+}
+
+/** Format CardData's optional ATK/DEF fields while retaining unknown flags. */
+export function formatCardDataStats(card: Pick<CardData, "atk" | "def" | "atkUnknown" | "defUnknown">): string | undefined {
+  const atk = formatStat(card.atk, card.atkUnknown);
+  const def = formatStat(card.def, card.defUnknown);
+  const hasAtk = atk !== undefined || card.atkUnknown;
+  const hasDef = def !== undefined || card.defUnknown;
+  if (!hasAtk && !hasDef) return undefined;
+  return [hasAtk ? `ATK ${atk ?? "?"}` : "", hasDef ? `DEF ${def ?? "?"}` : ""].filter(Boolean).join(" / ");
+}
 
 export function collectCodes(state?: DuelState | null, events: DuelEvent[] = [], prompt?: Prompt | null): number[] {
   const out: number[] = [];
   const add = (c?: CardRef) => { if (c) { if (c.code !== undefined) out.push(c.code); c.overlays?.forEach(add); } };
   state?.cards.forEach(add);
-  state?.chain.forEach((l) => add(l.card));
+  state?.chain.forEach((l) => { add(l.card); l.targets?.forEach(add); });
   for (const e of events) {
     if ("card" in e) add(e.card);
     if (e.t === "draw") e.cards.forEach(add);
@@ -26,7 +42,8 @@ const POS: Record<CardRef["position"], string> = { atk: "ATK", def: "DEF", faced
 
 function stats(c: CardRef): string {
   const s: string[] = [];
-  if (c.atk !== undefined || c.def !== undefined) s.push(`${c.atk ?? "?"}/${c.def ?? "?"}`);
+  const atk = formatStat(c.atk), def = formatStat(c.def);
+  if (atk !== undefined || def !== undefined) s.push(`ATK ${atk ?? "?"} / DEF ${def ?? "?"}`);
   if (c.level) s.push(`L${c.level}`);
   if (c.overlays?.length) s.push(`${c.overlays.length} mat`);
   if (c.counters) for (const [k, v] of Object.entries(c.counters)) s.push(`${k}:${v}`);
@@ -62,7 +79,7 @@ export function renderState(st: DuelState, cards: CardCache): string {
   lines.push(...sideBlock(st, opp, cards), ...sideBlock(st, st.you, cards));
   if (st.chain.length) {
     lines.push("Chain:");
-    st.chain.forEach((l, i) => lines.push(`  CL${i + 1}: ${cardName(l.card, cards)} (${who(l.card.controller, st.you)}) - ${l.desc}`));
+    st.chain.forEach((l, i) => lines.push(`  CL${i + 1}: ${cardName(l.card, cards)} (${who(l.card.controller, st.you)}) - ${l.desc}${l.targets?.length ? `; targets: ${l.targets.map((target) => cardName(target, cards)).join(", ")}` : ""}`));
   }
   return lines.join("\n");
 }

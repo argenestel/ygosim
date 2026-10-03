@@ -22,6 +22,8 @@ export interface CardData {
   code: number; name: string; desc: string;
   type: string[];         // ["Monster","Effect","Synchro"], ["Spell","Quick-Play"], ...
   attribute?: string; race?: string; level?: number; atk?: number; def?: number;
+  /** True when the card database records a printed “?” attack/defense value. */
+  atkUnknown?: boolean; defUnknown?: boolean;
   linkMarkers?: string[]; scale?: number;
   imageUrl: string;       // fetched at runtime (YGOPRODeck CDN), never redistributed
 }
@@ -33,7 +35,7 @@ export interface DuelState {
   phase: "draw" | "standby" | "main1" | "battle" | "main2" | "end";
   lp: [number, number];
   cards: CardRef[];       // already redacted for the viewer
-  chain: { card: CardRef; desc: string }[];
+  chain: { card: CardRef; desc: string; targets?: CardRef[] }[];
   you: PlayerIdx;
 }
 

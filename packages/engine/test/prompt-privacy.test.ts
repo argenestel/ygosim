@@ -51,6 +51,29 @@ const decisions: Array<[string, (card: OcgCardLocPos) => OcgMessage]> = [
 ];
 
 describe("prompt viewer privacy", () => {
+  it.each([L.DECK, L.EXTRA, L.HAND] as const)("names your own core-offered private selection in zone %s", location => {
+    const card = { ...target, controller: 0 as const, location };
+    const { tracker, context } = setup(card);
+    const translated = translatePrompt(decisions[0][1](card), context)!;
+    expect(translated.prompt.options[0].label).toBe(secret);
+    expect(translated.prompt.options[0].card).toMatchObject({ code: 100, atk: 1000, def: 1000 });
+    if (location === L.DECK) {
+      expect(tracker.stateFor(0).cards[0].code).toBeUndefined();
+      expect(tracker.stateFor(1).cards[0].code).toBeUndefined();
+    }
+  });
+
+  it("permits an explicitly confirmed opponent card only for its recipient", () => {
+    const card = { ...target, location: L.DECK };
+    const { tracker, context } = setup(card);
+    tracker.ingest({ type: M.CONFIRM_CARDS, player: 0, cards: [card] });
+    expect(translatePrompt(decisions[0][1](card), context)!.prompt.options[0].label).toBe(secret);
+    expect(tracker.stateFor(0).cards[0].code).toBeUndefined();
+    expect(tracker.stateFor(1).cards[0].code).toBeUndefined();
+    tracker.ingest({ type: M.SHUFFLE_DECK, player: 1 });
+    expect(tracker.promptCard(card, 0).code).toBeUndefined();
+  });
+
   it.each(decisions)("redacts opponent set identities and effect text in %s", (_kind, message) => {
     const { tracker, context } = setup();
     const translated = translatePrompt(message(target), context)!;

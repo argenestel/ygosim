@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { SqlCardDb, type RawCard, loadCardDb } from "../src/carddb.js";
-import { cdbFiles, dataDir, loadStrings, makeScriptReader } from "../src/data.js";
+import { cdbFiles, dataDir, formatCoreText, loadStrings, makeScriptReader } from "../src/data.js";
 import { validateDeck } from "../src/formats.js";
 import { parseYdk } from "../src/ydk.js";
 
@@ -55,6 +55,19 @@ describe("data and deck loading", () => {
     db.raw.set(raw.code, raw);
     expect(db.effectString((123n << 20n) | 1n)).toBe("second");
     expect(db.effectString((123n << 4n) | 0n)).toBe("first");
+  });
+
+  it("formats core card names and numeric placeholders", () => {
+    expect(formatCoreText('Use the effect of "%ls"?', "S:P Little Knight")).toBe('Use the effect of "S:P Little Knight"?');
+    expect(formatCoreText('Remove %d "%ls"', [2, "Counters"])).toBe('Remove 2 "Counters"');
+    expect(formatCoreText("Version mismatch(%X.0%X.%X).", [1, 2, 15])).toBe("Version mismatch(1.02.F).");
+    expect(formatCoreText("10%% resolved")).toBe("10% resolved");
+  });
+
+  it("does not leak printf placeholders when values are unavailable", () => {
+    const text = formatCoreText('Use the effect of "%ls"? Remove %d %s %X %q', []);
+    expect(text).toBe('Use the effect of "?"? Remove ? ? ? ?');
+    expect(text).not.toMatch(/%[A-Za-z]/);
   });
 
   it("parses strict deck sections and rejects malformed lines", () => {
