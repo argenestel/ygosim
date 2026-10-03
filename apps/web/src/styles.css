@@ -475,3 +475,5 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
 @media (max-width: 760px) { .duel-top .phase-bar { left: 6px; } .phase-bar span, .phase-bar .phase-go { width: 36px; font-size: 0.66rem; } }
+.action-dock.held .dock-main { opacity: 0.55; filter: saturate(0.4); }
+.action-dock.held .hint-text { color: var(--faint); }

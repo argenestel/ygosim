@@ -11,7 +11,7 @@ import { Board3D, type PlaceTarget } from "../duel3d/Scene3D";
 import { slotWorld } from "../duel3d/space";
 import { CardFace } from "./CardView";
 import { Inspector } from "./Inspector";
-import { CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
+import { ActionDock, CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
 import { SideDeck } from "./SideDeck";
 import { DuelLog } from "./DuelLog";
 import { ChainCallout, ChainPanel } from "./ChainPanel";
@@ -92,7 +92,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const { view, send, respond, setSpeed, clearError } = useDuel(open);
-  const { state, prompt, fx } = view;
+  const { state, prompt: rawPrompt, fx } = view;
 
   const [hover, setHover] = useState<CardRef | null>(null);
   const [pinned, setPinned] = useState<number | undefined>();
@@ -121,18 +121,37 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  useEffect(() => { setSelected([]); setMenu(null); }, [prompt?.promptId]);
-
   // Chain policy: "auto" skips windows where passing is the only choice; "off" passes every
   // optional window (a forced chain, min >= 1, always stops); "on" always stops.
+  // Decided synchronously so a window that will be passed is never drawn (no flicker).
+  const autoPassId = useMemo(() => {
+    const p = rawPrompt;
+    if (view.fatalError || chainMode === "on" || !p || p.kind !== "select_chain") return undefined;
+    const pass = p.options.find((o) => !o.card);
+    if (!pass || (p.min ?? 0) > 0) return undefined;
+    if (chainMode === "auto" && p.options.some((o) => o.card)) return undefined;
+    return pass.id;
+  }, [rawPrompt, chainMode, view.fatalError]);
+  const prompt = autoPassId ? undefined : rawPrompt;
   useEffect(() => {
-    if (view.fatalError || chainMode === "on" || !prompt || prompt.kind !== "select_chain") return;
-    const pass = prompt.options.find((o) => !o.card);
-    if (!pass || (prompt.min ?? 0) > 0) return;
-    if (chainMode === "auto" && prompt.options.some((o) => o.card)) return;
-    const t = setTimeout(() => respond(prompt.promptId, [pass.id]), 120);
+    if (autoPassId && rawPrompt) respond(rawPrompt.promptId, [autoPassId]);
+  }, [autoPassId, rawPrompt, respond]);
+
+  useEffect(() => { setSelected([]); setMenu(null); }, [prompt?.promptId]);
+
+  // Only show the "waiting" dock if no decision arrives for a moment; brief gaps between
+  // engine messages otherwise make the bottom-right button flip back and forth.
+  const idle = !prompt && !view.result;
+  // Keep the last action dock on screen (disabled) through short resolve gaps.
+  const lastDock = useRef<typeof prompt>(undefined);
+  if (prompt && isBoardMenu(prompt)) lastDock.current = prompt;
+  if (prompt && !isBoardMenu(prompt)) lastDock.current = undefined;
+  const [showWaiting, setShowWaiting] = useState(false);
+  useEffect(() => {
+    if (!idle) { setShowWaiting(false); return; }
+    const t = setTimeout(() => setShowWaiting(true), 500);
     return () => clearTimeout(t);
-  }, [prompt, chainMode, respond, view.fatalError]);
+  }, [idle]);
 
   // uid -> options that reference that card
   const byCard = useMemo(() => {
@@ -284,7 +303,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       {prompt && !view.result && !spectating && (
         <PromptPanel prompt={prompt} selected={selected} toggle={toggle} submit={submit} />
       )}
-      {!prompt && !view.result && !spectating && (
+      {idle && !showWaiting && !spectating && lastDock.current && <ActionDock prompt={lastDock.current} submit={() => {}} disabled />}
+      {showWaiting && !prompt && !view.result && !spectating && (
         <div className="action-dock waiting" aria-live="polite">
           <div className="hint-text">{view.busy ? "Resolving…" : state.turnPlayer === you ? "Waiting for a response…" : "Opponent's turn"}</div>
           <button className="dock-main" disabled><span className="dock-spin" />{view.busy ? "Resolving" : "Waiting for opponent"}</button>

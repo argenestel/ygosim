@@ -91,7 +91,7 @@ export function CardMenu({ options, at, onPick, onClose }: { options: PromptOpti
 const PRIMARY = [/battle phase/i, /main phase 2/i, /end (phase|turn)/i];
 
 /** Bottom-right dock: one clear "next step" button, the rest tucked behind ⋯. */
-function ActionDock({ prompt, submit }: { prompt: Prompt; submit: (ids: string[]) => void }) {
+export function ActionDock({ prompt, submit, disabled }: { prompt: Prompt; submit: (ids: string[]) => void; disabled?: boolean }) {
   const [more, setMore] = useState(false);
   const global = prompt.options.filter((o) => !o.card);
   const steps = PRIMARY.map((re) => global.find((o) => re.test(o.label))).filter((o): o is PromptOption => !!o);
@@ -99,12 +99,12 @@ function ActionDock({ prompt, submit }: { prompt: Prompt; submit: (ids: string[]
   const rest = global.filter((o) => o !== primary);
   const playable = prompt.options.length - global.length;
   return (
-    <div className="action-dock">
-      <div className="hint-text">{playable > 0 ? `${playable} action${playable > 1 ? "s" : ""} available — click a glowing card` : prompt.text}</div>
+    <div className={`action-dock${disabled ? " held" : ""}`}>
+      <div className="hint-text">{disabled ? "Resolving…" : playable > 0 ? `${playable} action${playable > 1 ? "s" : ""} available — click a glowing card` : prompt.text}</div>
       <div className="dock-row">
         {rest.length > 0 && (
           <div className="dock-more">
-            <button className="ghost" aria-label="More actions" onClick={() => setMore((m) => !m)}>⋯</button>
+            <button className="ghost" aria-label="More actions" disabled={disabled} onClick={() => setMore((m) => !m)}>⋯</button>
             {more && (
               <div className="dock-menu" onMouseLeave={() => setMore(false)}>
                 {rest.map((o) => <button key={o.id} onClick={() => { setMore(false); submit([o.id]); }}>{o.label}</button>)}
@@ -112,7 +112,7 @@ function ActionDock({ prompt, submit }: { prompt: Prompt; submit: (ids: string[]
             )}
           </div>
         )}
-        {primary && <button className="primary dock-main" onClick={() => submit([primary.id])}>{primary.label.replace(/^Go to /, "")} →</button>}
+        {primary && <button className="primary dock-main" disabled={disabled} onClick={() => submit([primary.id])}>{primary.label.replace(/^Go to /, "")} →</button>}
       </div>
     </div>
   );
