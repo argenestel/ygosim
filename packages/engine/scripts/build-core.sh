@@ -21,6 +21,7 @@ checkout https://github.com/edo9300/ygopro-core.git "$BUILD/wrapper/cpp/ygo" "$C
 git -C "$BUILD/wrapper/cpp/ygo" submodule update --init --depth 1 lua/src
 LUA_REV="$(git -C "$BUILD/wrapper/cpp/ygo/lua/src" rev-parse HEAD)"
 mkdir -p "$BUILD/output"
+cp "$ENGINE/scripts/summon-metadata.cpp" "$BUILD/wrapper/cpp/summon-metadata.cpp"
 
 # Lua must be compiled as C++ so Lua errors unwind the core's C++ objects.
 cat > "$BUILD/compile.sh" <<'COMPILE'
@@ -38,7 +39,7 @@ done
   -sENVIRONMENT=web \
   "-sEXPORTED_FUNCTIONS=['_malloc','_free']" \
   "-sEXPORTED_RUNTIME_METHODS=['stackSave','stackRestore','stackAlloc','getValue','stringToUTF8','lengthBytesUTF8','HEAP8','HEAPU8']" \
-  -Icpp/ygo/lua/src "${sources[@]}" cpp/wasm.cpp -o ../output/ocgcore.sync.mjs
+  -Icpp/ygo/lua/src "${sources[@]}" cpp/wasm.cpp cpp/summon-metadata.cpp -o ../output/ocgcore.sync.mjs
 COMPILE
 if [[ -n "${EMXX:-}" ]]; then
   "$EMXX" --version | head -1 | grep -F "$EMSDK_VERSION" >/dev/null
@@ -51,7 +52,7 @@ node "$ENGINE/scripts/build-core-glue.mjs" "$BUILD/wrapper" "$BUILD/output"
 # Supply the exact native and patched wrapper sources alongside the binary.
 tar --exclude=.git --sort=name --mtime=@0 --owner=0 --group=0 --numeric-owner \
   -czf "$BUILD/output/source.tar.gz" -C "$BUILD" \
-  wrapper/cpp/ygo wrapper/cpp/wasm.cpp wrapper/src wrapper/tsconfig.json compile.sh
+  wrapper/cpp/ygo wrapper/cpp/wasm.cpp wrapper/cpp/summon-metadata.cpp wrapper/src wrapper/tsconfig.json compile.sh
 cp "$BUILD/wrapper/cpp/ygo/COPYING" "$BUILD/output/COPYING"
 cp "$BUILD/wrapper/cpp/ygo/LICENSE" "$BUILD/output/LICENSE.core"
 cp "$BUILD/wrapper/LICENSE.md" "$BUILD/output/LICENSE.wrapper"
@@ -62,7 +63,7 @@ const [out, core, lua, wrapper, image] = process.argv.slice(2);
 const sha256 = Object.fromEntries(['ocgcore.sync.wasm', 'ocgcore.sync.mjs', 'index.mjs', 'source.tar.gz'].map(name =>
   [name, createHash('sha256').update(readFileSync(`${out}/${name}`)).digest('hex')]));
 writeFileSync(`${out}/build.json`, JSON.stringify({ core, lua, wrapper, image,
-  patches: ['synchronous Node loader', 'upstream 3c7d293 card-data offsets'], sha256 }, null, 2) + '\n');
+  patches: ['synchronous Node loader', 'upstream 3c7d293 card-data offsets', 'read-only summon-type bridge'], sha256 }, null, 2) + '\n');
 MANIFEST
 mkdir -p "$ENGINE/vendor/ocgcore"
 cp "$BUILD/output/"* "$ENGINE/vendor/ocgcore/"

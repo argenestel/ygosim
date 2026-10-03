@@ -17,10 +17,10 @@ const kinds = [
 ] as const;
 
 describe("summon kinds", () => {
-  it.each(kinds.filter(([, , kind]) => kind !== "ritual"))("uses Extra Deck card type %s as fallback when leaving the extra deck", (type, _reason, kind) => {
+  it.each(kinds)("does not guess the procedure from Extra Deck card type %s", (type) => {
     const duel = tracker(type | 1);
     duel.ingest({ type: M.MOVE, card: loc.code, from: { ...loc, location: L.EXTRA }, to: loc });
-    expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ t: "summon", kind });
+    expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ t: "summon", kind: "special" });
     expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ kind: "special" });
   });
   it.each(kinds)("prioritizes move reason over card type %s", (_type, reason, kind) => {
@@ -44,10 +44,24 @@ describe("summon kinds", () => {
     duel.ingest(move as OcgMessage);
     expect(duel.ingest({ type: M.SPSUMMONING, ...loc, code: 456 })[0]).toMatchObject({ kind: "special" });
   });
-  it("infers a hybrid Fusion/Pendulum summon only when leaving the extra deck", () => {
+  it("does not infer Fusion for a hybrid Fusion/Pendulum leaving the extra deck", () => {
     const duel = tracker(0x1000041);
     duel.ingest({ type: M.MOVE, card: loc.code, from: { ...loc, location: L.EXTRA }, to: loc });
-    expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ kind: "fusion" });
+    expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ kind: "special" });
+  });
+  it.each([
+    [0x43000000, "fusion"], [0x45000000, "ritual"], [0x46000000, "synchro"],
+    [0x49000000, "xyz"], [0x4a000000, "pendulum"], [0x4c000000, "link"],
+  ])("uses authoritative summon type %s over generic move reasons and card type", (summonType, kind) => {
+    const duel = tracker(1);
+    duel.ingest({ type: M.MOVE, card: loc.code, from: { ...loc, location: L.HAND }, to: loc, reason: 0x800 } as OcgMessage);
+    expect(duel.ingest({ type: M.SPSUMMONING, ...loc, summonType: Number(summonType) | 0x1234 } as OcgMessage)[0]).toMatchObject({ kind });
+    expect(duel.ingest({ type: M.SPSUMMONING, ...loc })[0]).toMatchObject({ kind: "special" });
+  });
+  it("generic authoritative summon type overrides a procedure reason", () => {
+    const duel = tracker(0x41);
+    duel.ingest({ type: M.MOVE, card: loc.code, from: { ...loc, location: L.EXTRA }, to: loc, reason: 0x40000 } as OcgMessage);
+    expect(duel.ingest({ type: M.SPSUMMONING, ...loc, summonType: 0x40000000 } as OcgMessage)[0]).toMatchObject({ kind: "special" });
   });
   it.each([0x81, 0x1000001])("emits special for Ritual/Pendulum type %s without a summon reason", type => {
     for (const location of [L.GRAVE, L.HAND, L.EXTRA]) {

@@ -22,6 +22,7 @@ export interface View {
   chat: { from: string; text: string }[];
   agents: Partial<Record<number, { agent: string; status: string; detail?: string }>>;
   error?: string;
+  fatalError?: string;
   busy: boolean;              // animations playing
 }
 
@@ -90,8 +91,6 @@ export function durationOf(e: DuelEvent): number {
   }
 }
 
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-
 export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: string) => void) => Conn) {
   const [view, dispatch] = useReducer(reducer, { players: [], fx: [], shake: 0, chat: [], busy: false, agents: {} });
   const conn = useRef<Conn | null>(null);
@@ -101,15 +100,29 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
   const fxId = useRef(1);
   const stateRef = useRef<DuelState | undefined>(undefined);
   const gameRef = useRef<number | undefined>(undefined);
+  const generation = useRef(0);
+  const timers = useRef(new Map<ReturnType<typeof setTimeout>, () => void>());
+  const pendingResponse = useRef<Prompt | undefined>(undefined);
+  const currentPrompt = useRef<Prompt | undefined>(undefined);
+  currentPrompt.current = view.prompt;
+  const halt = useCallback(() => {
+    generation.current++;
+    queue.current = [];
+    running.current = false;
+    for (const [timer, resolve] of timers.current) { clearTimeout(timer); resolve(); }
+    timers.current.clear();
+  }, []);
 
   const pump = useCallback(async () => {
     if (running.current) return;
+    const version = generation.current;
     running.current = true;
     dispatch({ k: "set", patch: { busy: true, prompt: undefined } });
     while (queue.current.length) {
       const batch = queue.current.shift()!;
       if (!stateRef.current) stateRef.current = batch.state;
       for (const e of batch.events) {
+        if (version !== generation.current) return;
         const fast = speed.current;
         if (stateRef.current) playEvent(e, stateRef.current.you);
         if (e.t === "win") { dispatch({ k: "set", patch: { result: { winner: e.winner, reason: e.reason } } }); continue; }
@@ -119,12 +132,17 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
         const id = fxId.current++;
         dispatch({ k: "fx+", fx: { id, ev: e } });
         const dur = durationOf(e);
-        setTimeout(() => dispatch({ k: "fx-", id }), dur * 1.6 / fast + 200);
+        const timer = setTimeout(() => { timers.current.delete(timer); if (version === generation.current) dispatch({ k: "fx-", id }); }, dur * 1.6 / fast + 200);
+        timers.current.set(timer, () => {});
         if (e.t === "new_turn") dispatch({ k: "set", patch: { banner: { id, text: e.turnPlayer === stateRef.current.you ? "YOUR TURN" : "OPPONENT'S TURN", sub: `Turn ${e.turn}` } } });
         if (e.t === "damage" || (e.t === "summon" && e.kind !== "normal" && e.kind !== "set") || (e.t === "move" && e.reason === "destroy"))
           dispatch({ k: "set", patch: { shake: id } });
-        if (fast < 50) await sleep(dur / fast);
+        if (fast < 50) await new Promise<void>(resolve => {
+          const wait = setTimeout(() => { timers.current.delete(wait); resolve(); }, dur / fast);
+          timers.current.set(wait, resolve);
+        });
       }
+      if (version !== generation.current) return;
       // Snap to the authoritative snapshot so any drift is corrected.
       stateRef.current = batch.state;
       dispatch({ k: "set", patch: { state: batch.state, ...(batch.prompt && !queue.current.length ? { prompt: batch.prompt } : {}) } });
@@ -134,34 +152,43 @@ export function useDuel(open: (onMsg: (m: ServerMsg) => void, onClose: (why: str
   }, []);
 
   useEffect(() => {
+    let active = true;
     const c = open(
       (m) => {
+        if (!active) return;
         switch (m.type) {
           case "room": {
             const patch: Partial<View> = { roomId: m.roomId, players: m.players, roomStatus: m.status, format: m.format, match: m.match, score: m.score, game: m.game };
             // A new game of a match starts from a clean board.
             if (m.status === "dueling" && m.game !== undefined && m.game !== gameRef.current) {
-              if (gameRef.current !== undefined) { queue.current = []; stateRef.current = undefined; Object.assign(patch, { state: undefined, result: undefined, prompt: undefined, fx: [] }); }
+              if (gameRef.current !== undefined) { halt(); stateRef.current = undefined; pendingResponse.current = undefined; Object.assign(patch, { state: undefined, result: undefined, prompt: undefined, fx: [], busy: false }); }
               gameRef.current = m.game;
             }
             dispatch({ k: "set", patch });
             break;
           }
-          case "events": queue.current.push({ events: m.events, state: m.state }); pump(); break;
-          case "prompt": queue.current.push({ events: [], state: m.state, prompt: m.prompt }); pump(); break;
+          case "events": pendingResponse.current = undefined; queue.current.push({ events: m.events, state: m.state }); pump(); break;
+          case "prompt": pendingResponse.current = undefined; queue.current.push({ events: [], state: m.state, prompt: m.prompt }); pump(); break;
           case "chat": dispatch({ k: "chat", from: m.from, text: m.text }); break;
           case "agent_status": dispatch({ k: "agent", seat: m.seat, info: { agent: m.agent, status: m.status, detail: m.detail } }); break;
-          case "error": dispatch({ k: "set", patch: { error: m.message } }); break;
+          case "error": {
+            if (m.message.startsWith("duel aborted:")) {
+              halt();
+              dispatch({ k: "set", patch: { error: m.message, fatalError: m.message, prompt: undefined, busy: false, fx: [] } });
+            } else dispatch({ k: "set", patch: { error: m.message, ...(pendingResponse.current ? { prompt: pendingResponse.current } : {}) } });
+            break;
+          }
         }
       },
-      (why) => dispatch({ k: "set", patch: { error: why } }),
+      (why) => { if (!active) return; halt(); dispatch({ k: "set", patch: { error: why, fatalError: why, prompt: undefined, busy: false, fx: [] } }); },
     );
     conn.current = c;
-    return () => c.close();
-  }, [open, pump]);
+    return () => { active = false; c.close(); halt(); conn.current = null; };
+  }, [open, pump, halt]);
 
   const send = useCallback((m: ClientMsg) => conn.current?.send(m), []);
   const respond = useCallback((promptId: string, choose: string[]) => {
+    pendingResponse.current = currentPrompt.current;
     dispatch({ k: "set", patch: { prompt: undefined } });
     send({ type: "action", action: { promptId, choose } });
   }, [send]);

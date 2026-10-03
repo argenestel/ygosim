@@ -1,5 +1,6 @@
 import type { Action, CardRef, DuelState, Prompt, PromptOption } from "@ygosim/protocol";
-import { bounds, cardAtk, legalize, text, type Bot } from "./bot.js";
+import { generateLegalSelections } from "@ygosim/protocol";
+import { cardAtk, text, type Bot } from "./bot.js";
 
 /**
  * Heuristic bot. Scores each option, picks the best `min..max` options.
@@ -9,15 +10,15 @@ export class NormalBot implements Bot {
   readonly name: string = "NormalBot";
 
   choose(state: DuelState, p: Prompt): Action {
-    const { min, max } = bounds(p);
-    if (p.options.length === 0) return legalize(p, undefined);
     const scored = p.options
       .map((o, i) => ({ o, s: this.score(state, p, o) - i * 1e-6 }))
       .sort((a, b) => b.s - a.s);
-    // Take the minimum required (at least one when allowed), best-scored first.
-    let pick: PromptOption[] = scored.slice(0, Math.max(min, Math.min(1, max))).map((x) => x.o);
-    if (min === 0 && pick.length && scored[0]!.s <= 0) pick = [];
-    return legalize(p, { promptId: p.promptId, choose: pick.map((o) => o.id) });
+    const candidates = generateLegalSelections({ ...p, options: scored.map(x => x.o) }).candidates;
+    if (!candidates.length) throw new Error("no acceptable action within selection search budget");
+    const scores = new Map(scored.map(x => [x.o.id, x.s]));
+    const value = (ids: string[]) => ids.reduce((total, id) => total + scores.get(id)!, 0);
+    candidates.sort((a, b) => value(b) - value(a));
+    return { promptId: p.promptId, choose: candidates[0]! };
   }
 
   protected oppMonsters(state: DuelState): CardRef[] {

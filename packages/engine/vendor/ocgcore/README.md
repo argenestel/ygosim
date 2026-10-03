@@ -29,6 +29,17 @@ The generated interface uses a Node file loader for the local WASM and accepts
 the usual `wasmBinary`, `locateFile`, print hooks and runtime initialization hook.
 Only the synchronous interface used by this engine is built.
 
+The read-only `ygosimSummonType` bridge in `scripts/summon-metadata.cpp` exposes
+the core card's authoritative summon type at each `SPSUMMONING` processing step.
+The compatibility adapter attaches this to the decoded event before processing
+the next step. Core processing returns as soon as a step produces messages, so
+the lookup does not depend on a later state refresh; it checks the card's code
+and location. This covers Ritual, Pendulum and contact procedures without
+inferring a procedure from card type or mistaking a revival for a new procedure.
+It changes neither upstream rules nor raw message/query formats. Alternate
+builds without the bridge retain reason-based classification where available
+and otherwise report `special` rather than guessing.
+
 `build.json` records exact revisions and artifact SHA-256 hashes.
 `source.tar.gz` contains the exact native sources, patched interface sources,
 and native compiler command. Core license notices (AGPL-3.0-or-later, with

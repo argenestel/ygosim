@@ -1,6 +1,10 @@
 import type { Action, Deck, Duel, DuelOptions, FormatId, MatchType, PlayerIdx, Prompt, ServerMsg } from "@ygosim/protocol";
 import { defaultAction, isLegal, legalize, type Bot } from "./ai/index.js";
 import { spectatorEvents, spectatorState } from "./spectator.js";
+import { BotProgress, actionDiagnostic, diagnosticFingerprint } from "./ai/progress.js";
+import { generateLegalSelections } from "@ygosim/protocol";
+import { performance } from "node:perf_hooks";
+import { randomInt } from "node:crypto";
 
 /** Anything that can sit in a seat: a socket client (send) or a bot. */
 export interface Participant {
@@ -18,12 +22,15 @@ export interface RoomOptions {
   botDelayMs?: number;        // small pause so humans can follow bot moves
   maxInvalid?: number;        // invalid actions before auto-pick
   seed?: number;
+  botRepeatLimit?: number;
+  botDecisionLimit?: number;
 }
 
 interface PendingWait {
   player: PlayerIdx;
   prompt: Prompt;
   resolve: (a: Action) => void;
+  reject: (error: unknown) => void;
   timer: NodeJS.Timeout;
   invalid: number;
 }
@@ -46,10 +53,13 @@ export class Room {
   private wait?: PendingWait;
   private surrendered?: PlayerIdx;
   private closed = false;
+  private cancelBot?: () => void;
   private siding?: Map<PlayerIdx, () => void>;
   readonly opts: Required<Omit<RoomOptions, "seed">> & { seed?: number };
   /** Resolves when the duel loop finishes. */
   finished?: Promise<void>;
+  readonly diagnostics: { decks: string[]; trace: ReturnType<typeof actionDiagnostic>[]; rejectedActions: number; failure?: string } = { decks: [], trace: [], rejectedActions: 0 };
+  private diagnosticContext?: { decks: (Deck | undefined)[]; states: import("@ygosim/protocol").DuelState[]; prompt: Prompt; failure?: string; trace: { player: PlayerIdx; prompt: Prompt; action: Action; rejected: boolean; error?: string }[] };
 
   constructor(
     private createDuel: CreateDuel,
@@ -61,10 +71,13 @@ export class Room {
     this.id = id ?? `r${++roomCounter}${Math.random().toString(36).slice(2, 6)}`;
     this.format = format;
     this.match = match;
-    this.opts = { turnTimeoutMs: 180_000, botDelayMs: 0, maxInvalid: 5, ...opts };
+    this.opts = { turnTimeoutMs: 180_000, botDelayMs: 0, maxInvalid: 5, botRepeatLimit: 12, botDecisionLimit: 512, ...opts, seed: opts.seed ?? randomInt(2 ** 48 - 1) };
   }
 
   get players(): Participant[] { return this.seats.filter((s): s is Participant => !!s); }
+  getDiagnosticContext() {
+    return this.diagnosticContext ? structuredClone({ roomId: this.id, seed: this.opts.seed, format: this.format, game: this.game, ...this.diagnosticContext }) : undefined;
+  }
   get isFull(): boolean { return !!this.seats[0] && !!this.seats[1]; }
   private isGameDone(): boolean { return this.status === "done"; }
 
@@ -105,7 +118,8 @@ export class Room {
   async close(): Promise<void> {
     this.closed = true;
     this.status = "done";
-    this.wait?.resolve(defaultAction(this.wait.prompt));
+    if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
+    this.cancelBot?.();
     for (const confirm of this.siding?.values() ?? []) confirm();
     await this.finished;
   }
@@ -143,7 +157,9 @@ export class Room {
     if (!isLegal(w.prompt, action)) {
       w.invalid++;
       safeSend(p, { type: "error", message: `illegal action for prompt ${w.prompt.promptId}; choose ${describeBounds(w.prompt)} of the option ids` });
-      if (w.invalid >= this.opts.maxInvalid) w.resolve(defaultAction(w.prompt));
+      if (w.invalid >= this.opts.maxInvalid) {
+        try { w.resolve(defaultAction(w.prompt)); } catch (error) { w.reject(error); }
+      }
       return;
     }
     w.resolve(action);
@@ -154,6 +170,13 @@ export class Room {
     if (seat === undefined) return safeSend(p, { type: "error", message: "not a player" });
     if (this.status !== "siding") return safeSend(p, { type: "error", message: "not in siding" });
     if (!this.siding?.has(seat)) return;
+    const original = this.originalDecks[seat]!;
+    const before = [...original.main, ...original.extra, ...original.side].sort((a, b) => a - b);
+    const after = [...deck.main, ...deck.extra, ...deck.side].sort((a, b) => a - b);
+    if (["main", "extra", "side"].some(zone => deck[zone as keyof Deck].length !== original[zone as keyof Deck].length)
+      || before.length !== after.length || before.some((code, index) => code !== after[index])) {
+      return safeSend(p, { type: "error", message: "side-decking must preserve the registered cards and each deck section's size" });
+    }
     this.decks[seat] = structuredClone(deck);
     this.siding.get(seat)!();
   }
@@ -162,8 +185,9 @@ export class Room {
     const seat = this.seatOf(p);
     if (seat === undefined || this.status !== "dueling") return;
     this.surrendered = seat;
+    this.cancelBot?.();
     // Unblock a waiting decision so the loop notices.
-    if (this.wait) this.wait.resolve(defaultAction(this.wait.prompt));
+    if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
   }
 
   private async run() {
@@ -203,8 +227,13 @@ export class Room {
         }
       }
     } catch (e) {
-      console.error(`[room ${this.id}]`, e);
-      this.broadcast({ type: "error", message: `duel aborted: ${(e as Error).message}` });
+      if (this.diagnosticContext) this.diagnosticContext.failure = String(e);
+      const message = e instanceof Error ? e.message : "";
+      this.diagnostics.failure = message.startsWith("bot made no progress") ? "bot made no progress; start a new duel and report the room reference"
+        : message.startsWith("no acceptable action") ? "no acceptable action within selection search budget"
+        : message === "bot decision timed out" ? message : "unexpected duel failure";
+      console.error(`[room ${this.id}]`, this.diagnostics);
+      this.broadcast({ type: "error", message: `duel aborted: ${this.diagnostics.failure}; room ${this.id}` });
       this.status = "done";
       this.broadcastRoom();
     } finally {
@@ -241,10 +270,18 @@ export class Room {
     this.status = "dueling";
     this.broadcastRoom();
     this.duel = await this.createDuel({ decks: [this.decks[0]!, this.decks[1]!], seed: this.opts.seed, format: this.format, firstPlayer });
+    this.diagnostics.decks = this.decks.map(diagnosticFingerprint);
+    const actionTrace: NonNullable<Room["diagnosticContext"]>["trace"] = [];
+    const diagnosticDecks = structuredClone(this.decks);
+    const progress = new BotProgress(this.opts.botRepeatLimit, this.opts.botDecisionLimit);
+    let yieldedAt = performance.now();
     for (let steps = 0; ; steps++) {
       // Synchronous engines and bots otherwise keep the microtask queue busy,
       // preventing socket messages, deadlines and shutdown from being handled.
-      if (steps % 100 === 99) await new Promise<void>(resolve => setImmediate(resolve));
+      if (steps % 100 === 99 || performance.now() - yieldedAt >= 8) {
+        await new Promise<void>(resolve => setImmediate(resolve));
+        yieldedAt = performance.now();
+      }
       if (this.closed) return;
       if (this.surrendered !== undefined) {
         this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
@@ -260,38 +297,90 @@ export class Room {
         break;
       }
       const { player, prompt } = res.pending;
-      await this.resolvePrompt(player, prompt);
+      const states = [this.duel.stateFor(0), this.duel.stateFor(1)];
+      this.diagnosticContext = { decks: diagnosticDecks, states, prompt: structuredClone(prompt), trace: actionTrace };
+      if (this.seats[player]!.bot) progress.observe(states, player, prompt, res.events);
+      await this.resolvePrompt(player, prompt, states[player]!);
     }
   }
 
-  private async resolvePrompt(player: PlayerIdx, prompt: Prompt) {
+  private async resolvePrompt(player: PlayerIdx, prompt: Prompt, state: import("@ygosim/protocol").DuelState) {
     const duel = this.duel!;
     const seat = this.seats[player]!;
     for (let attempt = 0; ; attempt++) {
       let action: Action;
       if (seat.bot) {
-        if (this.opts.botDelayMs) await sleep(this.opts.botDelayMs);
         let cand: Action | undefined;
+        let timer: NodeJS.Timeout | undefined;
+        let delayTimer: NodeJS.Timeout | undefined;
         try {
-          const chooseResult = seat.bot.choose(duel.stateFor(player), prompt);
-          cand = await Promise.resolve(chooseResult);
-        } catch { cand = undefined; }
+          cand = await Promise.race([
+            Promise.resolve().then(async () => {
+              if (this.closed || this.surrendered !== undefined) return undefined;
+              if (this.opts.botDelayMs) await new Promise<void>(resolve => { delayTimer = setTimeout(resolve, this.opts.botDelayMs); });
+              if (this.closed || this.surrendered !== undefined) return undefined;
+              return seat.bot!.choose(state, prompt);
+            }),
+            new Promise<Action | undefined>((resolve, reject) => {
+              this.cancelBot = () => resolve(undefined);
+              timer = setTimeout(() => reject(new Error("bot decision timed out")), this.opts.turnTimeoutMs);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          clearTimeout(delayTimer);
+          this.cancelBot = undefined;
+        }
+        if (this.closed || this.surrendered !== undefined) return;
+        if (cand && !isLegal(prompt, cand)) {
+          this.diagnostics.rejectedActions++;
+          this.diagnosticContext?.trace.push({ player, prompt: structuredClone(prompt), action: structuredClone(cand), rejected: true, error: "bot returned an invalid selection" });
+          if (this.diagnosticContext && this.diagnosticContext.trace.length > 32) this.diagnosticContext.trace.shift();
+          this.diagnostics.trace.push(actionDiagnostic(player, prompt, cand, true));
+          if (this.diagnostics.trace.length > 32) this.diagnostics.trace.shift();
+          safeSend(seat, { type: "error", message: "bot returned an invalid selection; using a legal fallback" });
+        }
         action = legalize(prompt, cand);
       } else {
         const answer = this.waitFor(player, prompt);
-        safeSend(seat, { type: "prompt", prompt, state: duel.stateFor(player) });
+        safeSend(seat, { type: "prompt", prompt, state });
         action = await answer;
       }
       if (this.closed || this.surrendered !== undefined) return;
+      const record = { player, prompt: structuredClone(prompt), action: structuredClone(action), rejected: false, error: undefined as string | undefined };
+      this.diagnosticContext?.trace.push(record);
+      if (this.diagnosticContext && this.diagnosticContext.trace.length > 32) this.diagnosticContext.trace.shift();
       try {
         duel.respond(player, action);
+        this.diagnostics.trace.push(actionDiagnostic(player, prompt, action));
+        if (this.diagnostics.trace.length > 32) this.diagnostics.trace.shift();
         return;
       } catch (e) {
+        this.diagnostics.rejectedActions++;
+        record.rejected = true;
+        record.error = String(e);
+        this.diagnostics.trace.push(actionDiagnostic(player, prompt, action, true));
+        if (this.diagnostics.trace.length > 32) this.diagnostics.trace.shift();
         // Engine rejected a structurally valid answer; tell humans and re-ask, fall back eventually.
-        safeSend(seat, { type: "error", message: `engine rejected action: ${(e as Error).message}` });
+        safeSend(seat, { type: "error", message: "engine rejected action; choose a valid response to the current prompt" });
         if (attempt >= 2) {
-          for (const opt of [defaultAction(prompt), ...prompt.options.map((o) => ({ promptId: prompt.promptId, choose: [o.id] }))]) {
-            try { duel.respond(player, opt); return; } catch { /* try next */ }
+          for (const choose of generateLegalSelections(prompt).candidates) {
+            const opt = { promptId: prompt.promptId, choose };
+            const fallback = { player, prompt: structuredClone(prompt), action: opt, rejected: false, error: undefined as string | undefined };
+            this.diagnosticContext?.trace.push(fallback);
+            if (this.diagnosticContext && this.diagnosticContext.trace.length > 32) this.diagnosticContext.trace.shift();
+            try {
+              duel.respond(player, opt);
+              this.diagnostics.trace.push(actionDiagnostic(player, prompt, opt));
+              if (this.diagnostics.trace.length > 32) this.diagnostics.trace.shift();
+              return;
+            } catch (e) {
+              this.diagnostics.rejectedActions++;
+              fallback.rejected = true;
+              fallback.error = String(e);
+              this.diagnostics.trace.push(actionDiagnostic(player, prompt, opt, true));
+              if (this.diagnostics.trace.length > 32) this.diagnostics.trace.shift();
+            }
           }
           throw new Error(`no acceptable action for prompt ${prompt.promptId}`);
         }
@@ -300,7 +389,7 @@ export class Room {
   }
 
   private waitFor(player: PlayerIdx, prompt: Prompt): Promise<Action> {
-    return new Promise<Action>((resolve) => {
+    return new Promise<Action>((resolve, reject) => {
       const done = (a: Action) => {
         if (this.wait?.prompt !== prompt) return;
         clearTimeout(this.wait.timer);
@@ -310,9 +399,15 @@ export class Room {
       const timer = setTimeout(() => {
         const seat = this.seats[player];
         if (seat) safeSend(seat, { type: "error", message: "turn timer expired; auto-picked a default action" });
-        done(defaultAction(prompt));
+        try { done(defaultAction(prompt)); } catch (error) { failed(error); }
       }, this.opts.turnTimeoutMs);
-      this.wait = { player, prompt, resolve: done, timer, invalid: 0 };
+      const failed = (error: unknown) => {
+        if (this.wait?.prompt !== prompt) return;
+        clearTimeout(this.wait.timer);
+        this.wait = undefined;
+        reject(error);
+      };
+      this.wait = { player, prompt, resolve: done, reject: failed, timer, invalid: 0 };
     });
   }
 
@@ -351,4 +446,3 @@ function describeBounds(p: Prompt) {
 function safeSend(p: Participant, msg: ServerMsg) {
   try { p.send(msg); } catch { /* socket gone */ }
 }
-const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));

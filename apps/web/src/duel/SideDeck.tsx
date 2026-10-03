@@ -8,11 +8,11 @@ const EXTRA = ["Fusion", "Synchro", "Xyz", "Link"];
 
 function Pick({ code, on, onClick }: { code: number; on: boolean; onClick: () => void }) {
   useCardData(code);
-  return <button className={`db-card${on ? " picked" : ""}`} onClick={onClick}><CardFace code={code} /></button>;
+  return <button className={`db-card${on ? " picked" : ""}`} aria-pressed={on} onClick={onClick}><CardFace code={code} /></button>;
 }
 
 /** Between games of a match: swap cards between main/extra and side, keeping sizes equal. */
-export function SideDeck({ deck, score, game, onDone }: { deck: Deck; score?: [number, number]; game?: number; onDone: (d: Deck) => void }) {
+export function SideDeck({ deck, score, game, error, onDone }: { deck: Deck; score?: [number, number]; game?: number; error?: string; onDone: (d: Deck) => void }) {
   const [d, setD] = useState<Deck>(deck);
   const [sel, setSel] = useState<{ from: keyof Deck; i: number } | null>(null);
   const [sent, setSent] = useState(false);
@@ -38,6 +38,7 @@ export function SideDeck({ deck, score, game, onDone }: { deck: Deck; score?: [n
     <div className="side-screen">
       <h2>Side Deck · Game {(game ?? 1) + 1}</h2>
       {score && <p className="score-line">Score {score[0]} – {score[1]}</p>}
+      {error && <p className="err" role="alert">{error}</p>}
       <p className="muted">Click a card, then a card in the other section to swap them.</p>
       {(["main", "extra", "side"] as const).map((k) => (
         <section key={k}>
@@ -47,7 +48,7 @@ export function SideDeck({ deck, score, game, onDone }: { deck: Deck; score?: [n
       ))}
       <div className="row">
         <button onClick={() => { setD(deck); setSel(null); }}>Reset</button>
-        <button className="primary" disabled={sent} onClick={() => { setSent(true); onDone(d); }}>{sent ? "Waiting for opponent…" : "Ready"}</button>
+        <button className="primary" disabled={sent && !error} onClick={() => { setSent(true); onDone(d); }}>{sent && !error ? "Waiting for opponent…" : "Ready"}</button>
       </div>
     </div>
   );

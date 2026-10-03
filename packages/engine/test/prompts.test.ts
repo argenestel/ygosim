@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { generateLegalSelections, validateSelection } from "@ygosim/protocol";
 import {
   OcgLocation,
   OcgMessageType,
@@ -46,6 +47,77 @@ function translate(message: OcgMessage) {
 }
 
 describe("translatePrompt", () => {
+  it("shares weighted tribute validation and returns only authoritative legal candidates", () => {
+    const translated = translate({
+      type: OcgMessageType.SELECT_TRIBUTE, player: 0, can_cancel: true, min: 2, max: 2,
+      selects: [1, 1, 2].map((release_param, index) => ({ ...loc(100, index), release_param })),
+    });
+    expect(translated.prompt.constraints).toEqual({ kind: "tribute", required: 2, values: { "0": 1, "1": 1, "2": 2 }, cancel: "cancel" });
+    expect(validateSelection(translated.prompt, ["0"]).valid).toBe(false);
+    expect(validateSelection(translated.prompt, ["0", "1"]).valid).toBe(true);
+    expect(validateSelection(translated.prompt, ["2"]).valid).toBe(true);
+    expect(validateSelection(translated.prompt, ["cancel", "0"]).valid).toBe(false);
+    const generated = generateLegalSelections(translated.prompt);
+    expect(generated.candidates).toContainEqual(["0", "1"]);
+    expect(generated.candidates).toContainEqual(["2"]);
+    expect(generated.candidates).toContainEqual(["cancel"]);
+    for (const ids of generated.candidates) expect(() => translated.respond(ids)).not.toThrow();
+    expect(() => translated.respond(["0"])).toThrow(/tributes/);
+    expect(translated.respond(["0", "1"])).toEqual({ type: OcgResponseType.SELECT_TRIBUTE, indicies: [0, 1] });
+  });
+
+  it("matches authoritative sum rules with mandatory alternative values and minimal overpayment", () => {
+    for (const select_max of [0, 1]) {
+      const translated = translate({
+        type: OcgMessageType.SELECT_SUM, player: 0, select_max, amount: 8, min: 1, max: 0,
+        selects_must: [{ ...loc(100), amount: 2 | (4 << 16) }],
+        selects: [2, 4 | (6 << 16), 8].map((amount, index) => ({ ...loc(200, index + 1), amount })),
+      });
+      for (let mask = 0; mask < 8; mask++) {
+        const ids = [0, 1, 2].filter((n) => mask & (1 << n)).map(String);
+        let accepted = true;
+        try { translated.respond(ids); } catch { accepted = false; }
+        expect(validateSelection(translated.prompt, ids).valid).toBe(accepted);
+      }
+      const generated = generateLegalSelections(translated.prompt);
+      expect(generated.candidates.length).toBeGreaterThan(0);
+      for (const ids of generated.candidates) expect(() => translated.respond(ids)).not.toThrow();
+    }
+    const mandatoryOnly = translate({ type: OcgMessageType.SELECT_SUM, player: 0, select_max: 0, amount: 8, min: 1, max: 0,
+      selects_must: [{ ...loc(100), amount: 8 }], selects: [] });
+    expect(validateSelection(mandatoryOnly.prompt, []).valid).toBe(true);
+    expect(generateLegalSelections(mandatoryOnly.prompt).candidates).toEqual([[]]);
+  });
+
+  it("keeps interactive actions atomic and prefers a legal finish", () => {
+    const translated = translate({ type: OcgMessageType.SELECT_UNSELECT_CARD, player: 0, can_cancel: true, can_finish: true,
+      min: 0, max: 3, select_cards: [loc(100)], unselect_cards: [loc(200, 1)] });
+    for (const ids of [[], ["finish", "cancel"], ["select:0", "unselect:0"], ["missing"]]) {
+      expect(validateSelection(translated.prompt, ids).valid).toBe(false);
+      expect(() => translated.respond(ids)).toThrow();
+    }
+    expect(generateLegalSelections(translated.prompt).candidates).toEqual([["finish"], ["select:0"], ["unselect:0"], ["cancel"]]);
+    for (const ids of generateLegalSelections(translated.prompt).candidates) expect(() => translated.respond(ids)).not.toThrow();
+  });
+
+  it("bounds combinatorial search and handles standalone cancellation below the card minimum", () => {
+    const translated = translate({ type: OcgMessageType.SELECT_CARD, player: 0, can_cancel: true, min: 2, max: 3,
+      selects: Array.from({ length: 30 }, (_, index) => loc(100, index)) });
+    expect(validateSelection(translated.prompt, []).valid).toBe(false);
+    expect(validateSelection(translated.prompt, ["cancel"]).valid).toBe(true);
+    const generated = generateLegalSelections(translated.prompt, { maxCandidates: 2, maxVisited: 10 });
+    expect(generated.exhausted).toBe(true);
+    expect(generated.visited).toBeLessThanOrEqual(10);
+    expect(generated.candidates.length).toBeLessThanOrEqual(2);
+    for (const ids of generated.candidates) expect(() => translated.respond(ids)).not.toThrow();
+    const oversizedSum = {
+      promptId: "large", kind: "select_sum" as const, text: "Large sum", min: 0, max: 0, options: [],
+      constraints: { kind: "sum" as const, target: 100000, mode: "exact" as const, values: {},
+        mandatory: [Array.from({ length: 1000 }, (_, n) => n + 1), Array.from({ length: 1000 }, (_, n) => n + 1)] },
+    };
+    expect(validateSelection(oversizedSum, []).reason).toContain("validation budget");
+    expect(generateLegalSelections(oversizedSum)).toMatchObject({ exhausted: true, candidates: [] });
+  });
   it("returns no decision for non-interactive engine messages", () => {
     expect(translatePrompt({ type: OcgMessageType.DRAW, player: 0, drawn: [] }, context())).toBeUndefined();
     expect(translatePrompt({ type: OcgMessageType.SELECT_YESNO, player: 2, description: 1n }, context())).toBeUndefined();
@@ -234,6 +306,10 @@ describe("translatePrompt", () => {
       type: OcgResponseType.SELECT_COUNTER, counters: [2, 1],
     });
     expect(() => translated.respond(["counter:0:1", "counter:0:2"])).toThrow(/one counter amount/);
+    expect(validateSelection(translated.prompt, ["counter:0:1", "counter:0:2"]).valid).toBe(false);
+    const generated = generateLegalSelections(translated.prompt);
+    expect(generated.candidates).toContainEqual(["counter:1:3"]);
+    for (const ids of generated.candidates) expect(() => translated.respond(ids)).not.toThrow();
     expect(() => translated.respond(["counter:1:2"])).toThrow(/selected 2 counters/);
   });
 

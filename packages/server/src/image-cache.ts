@@ -3,7 +3,17 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const IMG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "img");
-const YGOPRODECK_CDN = "https://images.ygoprodeck.com/images/cards";
+const YGOPRODECK_CDN = "https://images.ygoprodeck.com/images";
+const pending = new Map<string, Promise<Buffer | null>>();
+let activeDownloads = 0;
+const waiting: (() => void)[] = [];
+const controllers = new Set<AbortController>();
+let generation = 0;
+
+export function abortImageDownloads(): void {
+  generation++;
+  for (const controller of controllers) controller.abort();
+}
 
 export interface CacheEntry {
   url: string;
@@ -32,29 +42,50 @@ export async function getImageUrl(code: number, size: "full" | "small" = "full")
 
 export async function getImageBuffer(code: number, size: "full" | "small" = "full"): Promise<Buffer | null> {
   const path = getImagePath(code, size);
-
+  const version = generation;
   try {
-    // Try to read from cache
     return await readFile(path);
   } catch {
-    // Cache miss, download from CDN
-    try {
-      const url = await getImageUrl(code, size);
-      const res = await fetch(url);
-      if (!res.ok) return null;
-
-      const buffer = Buffer.from(await res.arrayBuffer());
-
-      // Save to cache asynchronously (don't await)
-      const dirPath = dirname(path);
-      mkdir(dirPath, { recursive: true })
-        .then(() => writeFile(path, buffer))
-        .catch((e) => console.warn(`[image-cache] failed to save ${path}:`, e));
-
-      return buffer;
-    } catch (e) {
-      console.warn(`[image-cache] failed to download ${code}:`, e);
-      return null;
-    }
+    if (version !== generation) return null;
+    const existing = pending.get(path);
+    if (existing) return existing;
+    if (pending.size >= 128) return null;
+    const controller = new AbortController();
+    controllers.add(controller);
+    const download = (async () => {
+      if (activeDownloads >= 16) await new Promise<void>(resolve => waiting.push(resolve));
+      else activeDownloads++;
+      try {
+        if (controller.signal.aborted) return null;
+        const res = await fetch(await getImageUrl(code, size), { signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) });
+        if (!res.ok || !res.body) { await res.body?.cancel(); return null; }
+        const reader = res.body.getReader();
+        const chunks: Buffer[] = [];
+        let length = 0;
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          length += value.byteLength;
+          if (length > 3 * 1024 * 1024) { await reader.cancel(); return null; }
+          chunks.push(Buffer.from(value));
+        }
+        if (!length) return null;
+        const buffer = Buffer.concat(chunks, length);
+        try { await mkdir(dirname(path), { recursive: true }); await writeFile(path, buffer); }
+        catch { console.warn("[image-cache] could not persist card art"); }
+        return buffer;
+      } catch {
+        console.warn("[image-cache] card-art download unavailable");
+        return null;
+      } finally {
+        controllers.delete(controller);
+        const resume = waiting.shift();
+        if (resume) resume();
+        else activeDownloads--;
+      }
+    })();
+    pending.set(path, download);
+    try { return await download; }
+    finally { pending.delete(path); }
   }
 }

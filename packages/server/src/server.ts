@@ -1,5 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { bodyLimit } from "hono/body-limit";
 import { serve } from "@hono/node-server";
 import { WebSocketServer, type WebSocket } from "ws";
 import { fileURLToPath } from "node:url";
@@ -8,7 +9,7 @@ import type { CardDb, ServerMsg, FormatId } from "@ygosim/protocol";
 import { Lobby } from "./lobby.js";
 import { sampleDecks, validateDeck } from "./decks.js";
 import { loadEngine, parseYdkLocal, defaultFormats, type EngineApi } from "./engine.js";
-import { ensureImgDir, getImageBuffer } from "./image-cache.js";
+import { abortImageDownloads, ensureImgDir, getImageBuffer } from "./image-cache.js";
 import { getAgentInfo, launchAgent, stopAgent, stopRoomAgents } from "./agents.js";
 import type { CreateDuel, RoomOptions } from "./room.js";
 
@@ -17,6 +18,11 @@ export interface ServerOptions extends RoomOptions {
   engine?: EngineApi | null;
   db?: CardDb | null;
   createDuel?: CreateDuel;
+  maxRooms?: number;
+  maxConnections?: number;
+  maxPayloadBytes?: number;
+  messagesPerSecond?: number;
+  messageBurst?: number;
 }
 
 export function buildApi(
@@ -28,9 +34,29 @@ export function buildApi(
   getPort = () => Number(process.env.PORT ?? 7777),
 ) {
   const app = new Hono();
+  app.use("/api/*", bodyLimit({ maxSize: 64 * 1024 }));
   app.use("/api/*", cors());
 
   app.get("/api/health", (c) => c.json({ ok: true, db: !!getDb() }));
+  app.get("/api/ready", (c) => {
+    const ready = !!getEngine() && !!getDb();
+    return c.json({ ready }, ready ? 200 : 503);
+  });
+  app.use("/api/agents/*", async (c, next) => {
+    if (c.req.method !== "POST") return next();
+    const peer = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket.remoteAddress;
+    const origin = c.req.header("origin");
+    let localOrigin = !origin;
+    if (origin) {
+      try { localOrigin = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(origin).hostname); }
+      catch { localOrigin = false; }
+    }
+    if (process.env.YGOSIM_ALLOW_AGENT_LAUNCH !== "1" || !["127.0.0.1", "::1", "::ffff:127.0.0.1"].includes(peer ?? "")
+      || c.req.header("x-forwarded-for") || !localOrigin) {
+      return c.json({ ok: false, error: "Agent control is restricted to explicitly enabled local requests" }, 403);
+    }
+    return next();
+  });
 
   app.get("/api/cards/:code", async (c) => {
     const db = getDb() ?? await getDbReady();
@@ -188,14 +214,15 @@ export function buildApi(
 
   app.post("/api/agents/launch", async (c) => {
     // Check for localhost and environment flag
-    const forwarded = c.req.header("x-forwarded-for");
-    if (!process.env.YGOSIM_ALLOW_AGENT_LAUNCH) {
+    if (process.env.YGOSIM_ALLOW_AGENT_LAUNCH !== "1") {
       return c.json({ ok: false, error: "Agent launch disabled" }, 403);
     }
     try {
       const body = await c.req.json() as any;
+      if (!["claude", "codex"].includes(body?.agent) || typeof body.roomId !== "string" || !lobby.rooms.has(body.roomId)
+        || body.seat !== undefined && body.seat !== 0 && body.seat !== 1) return c.json({ ok: false, error: "invalid agent request" }, 400);
       const mpcPath = fileURLToPath(new URL("../../mcp/dist/index.js", import.meta.url));
-      const result = await launchAgent(mpcPath, body.agent, body.roomId, body.seat ?? 1);
+      const result = await launchAgent(mpcPath, body.agent, body.roomId, body.seat ?? 1, getPort());
       return c.json(result);
     } catch (e) {
       return c.json({ ok: false, error: (e as Error).message }, 400);
@@ -205,6 +232,8 @@ export function buildApi(
   app.post("/api/agents/stop", async (c) => {
     try {
       const body = await c.req.json() as any;
+      if (typeof body?.roomId !== "string" || body.seat !== undefined && body.seat !== 0 && body.seat !== 1)
+        return c.json({ ok: false, error: "invalid agent request" }, 400);
       stopAgent(body.roomId, body.seat ?? 1);
       return c.json({ ok: true });
     } catch (e) {
@@ -218,7 +247,9 @@ export function buildApi(
 
     try {
       const body = await c.req.json() as any;
-      const names = Array.isArray(body.names) ? body.names : [];
+      if (!Array.isArray(body?.names) || body.names.length > 100 || body.names.some((name: unknown) => typeof name !== "string" || name.length > 200))
+        return c.json({ error: "names must contain at most 100 strings of at most 200 characters" }, 400);
+      const names: string[] = body.names;
 
       const codes = names.map((name: string) => {
         const exact = db.search({ name, limit: 1 });
@@ -273,8 +304,11 @@ export async function startServer(opts: ServerOptions = {}) {
   const lobby = new Lobby(createDuel, {
     turnTimeoutMs: opts.turnTimeoutMs ?? Number(process.env.TURN_TIMEOUT_MS ?? 180_000),
     botDelayMs: opts.botDelayMs ?? Number(process.env.BOT_DELAY_MS ?? 300),
-    maxInvalid: opts.maxInvalid,
-  }, undefined, getEngine, getDbReady);
+    maxInvalid: opts.maxInvalid ?? 5,
+    seed: opts.seed,
+    botRepeatLimit: opts.botRepeatLimit ?? 12,
+    botDecisionLimit: opts.botDecisionLimit ?? 512,
+  }, undefined, getEngine, getDbReady, opts.maxRooms ?? 100);
 
   let actualPort = port;
   const app = buildApi(lobby, getDb, getEngine, getDbReady, parse, () => actualPort);
@@ -283,15 +317,37 @@ export async function startServer(opts: ServerOptions = {}) {
   await ensureImgDir().catch((e) => console.warn("[server] failed to create image cache dir:", e));
 
   const http = serve({ fetch: app.fetch, port });
-  const wss = new WebSocketServer({ noServer: true });
+  const maxConnections = opts.maxConnections ?? 200;
+  const messagesPerSecond = opts.messagesPerSecond ?? 30;
+  const messageBurst = opts.messageBurst ?? opts.messagesPerSecond ?? 256;
+  const wss = new WebSocketServer({ noServer: true, maxPayload: opts.maxPayloadBytes ?? 64 * 1024 });
   http.on("upgrade", (req: IncomingMessage, socket, head) => {
-    if (new URL(req.url ?? "/", "http://x").pathname !== "/ws") return socket.destroy();
+    let path: string;
+    try { path = new URL(req.url ?? "/", "http://x").pathname; }
+    catch { return socket.destroy(); }
+    if (path !== "/ws") return socket.destroy();
+    if (wss.clients.size >= maxConnections) {
+      socket.end("HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n\r\n");
+      return;
+    }
     wss.handleUpgrade(req, socket, head, (ws) => wss.emit("connection", ws, req));
   });
   wss.on("connection", (ws: WebSocket) => {
-    const send = (m: ServerMsg) => { if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(m)); };
+    const send = (m: ServerMsg) => {
+      if (ws.readyState !== ws.OPEN) return;
+      if (ws.bufferedAmount > 512 * 1024) { ws.close(1008, "client cannot keep up with duel updates"); return; }
+      ws.send(JSON.stringify(m));
+    };
     const session = lobby.connect(send);
+    let refillAt = performance.now();
+    let tokens = messageBurst;
+    ws.on("error", () => ws.terminate());
     ws.on("message", (data) => {
+      const now = performance.now();
+      tokens = Math.min(messageBurst, tokens + (now - refillAt) * messagesPerSecond / 1000);
+      refillAt = now;
+      if (tokens < 1) { ws.close(1008, "message rate limit exceeded"); return; }
+      tokens--;
       let msg: unknown;
       try { msg = JSON.parse(String(data)); } catch { return send({ type: "error", message: "invalid JSON" }); }
       try { void lobby.handle(session, msg).catch((e) => send({ type: "error", message: (e as Error).message })); } catch (e) { send({ type: "error", message: (e as Error).message }); }
@@ -319,7 +375,9 @@ export async function startServer(opts: ServerOptions = {}) {
   return {
     port: actualPort, lobby, app,
     close: async () => {
+      abortImageDownloads();
       const roomsClosed = Promise.all([...lobby.rooms.values()].map(room => room.close()));
+      for (const room of lobby.rooms.values()) stopRoomAgents(room.id);
       for (const client of wss.clients) client.terminate();
       await Promise.all([
         roomsClosed,

@@ -97,6 +97,7 @@ export function renderEvents(events: DuelEvent[], you: PlayerIdx, cards: CardCac
 export function renderPrompt(p: Prompt, cards: CardCache): string {
   const lines = [`PROMPT [${p.kind}] ${p.text} (promptId: ${p.promptId})`];
   if (p.min !== undefined || p.max !== undefined) lines.push(`Choose ${p.min ?? 1}..${p.max ?? 1} option(s). Numbers are 1-based; quoted strings are exact ids.`);
+  if (p.constraints) lines.push(`Selection constraints: ${JSON.stringify(p.constraints)}`);
   for (const [i, o] of p.options.entries()) {
     let label = o.label;
     if (o.card) {

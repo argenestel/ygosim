@@ -48,8 +48,99 @@ export interface Prompt {
   text: string;           // human/LLM-readable description of what is being asked
   min?: number; max?: number;
   options: PromptOption[];
+  constraints?: SelectionConstraints;
 }
 export interface PromptOption { id: string; label: string; card?: CardRef; }
+
+export type SelectionConstraints =
+  | { kind: "tribute"; required: number; values: Record<string, number>; cancel?: string }
+  | { kind: "sum"; target: number; mode: "exact" | "at_least"; values: Record<string, number[]>; mandatory: number[][]; exclusiveGroups?: string[][] }
+  | { kind: "interactive"; actions: Record<string, "select" | "unselect" | "finish" | "cancel"> }
+  | { kind: "count"; cancel?: string };
+
+export interface SelectionValidity { valid: boolean; reason?: string; exhausted?: boolean }
+
+export function validateSelection(p: Prompt, ids: readonly string[]): SelectionValidity {
+  const invalid = (reason: string): SelectionValidity => ({ valid: false, reason });
+  if (new Set(ids).size !== ids.length) return invalid("Choose each option at most once.");
+  if (ids.some((id) => !p.options.some((o) => o.id === id))) return invalid("Unknown selection option.");
+  const c = p.constraints;
+  if (c?.kind === "interactive") {
+    return ids.length === 1 && c.actions[ids[0]!] !== undefined ? { valid: true } : invalid("Choose one select, unselect, finish, or cancel action.");
+  }
+  if ((c?.kind === "tribute" || c?.kind === "count") && c.cancel && ids.includes(c.cancel)) {
+    return ids.length === 1 ? { valid: true } : invalid("Cancel must be chosen alone.");
+  }
+  const min = p.min ?? 1, max = p.max ?? 1;
+  if (ids.length < min || ids.length > max) return invalid(`Choose ${min}–${max} option(s); ${ids.length} chosen.`);
+  if (c?.kind === "tribute") {
+    const total = ids.reduce((n, id) => n + (c.values[id] ?? 0), 0);
+    if (total < c.required) return invalid(`Tributes provide ${total}; need at least ${c.required}.`);
+  }
+  if (c?.kind === "sum") {
+    if (c.exclusiveGroups?.some((group) => ids.filter((id) => group.includes(id)).length > 1)) return invalid("Choose only one amount per card.");
+    const parameters = [...c.mandatory, ...ids.map((id) => c.values[id] ?? [])];
+    if (!parameters.length || c.target <= 0 || parameters.some((v) => !v.length)) return invalid("Selected cards do not satisfy the required sum.");
+    if (c.mode === "exact") {
+      let sums = new Set([0]);
+      let steps = 0;
+      for (const values of parameters) {
+        const next = new Set<number>();
+        for (const sum of sums) for (const value of values) {
+          if (++steps > 100000) return { valid: false, reason: "Selection sum exceeds the validation budget; the engine must validate it.", exhausted: true };
+          if (value > 0 && sum + value <= c.target) next.add(sum + value);
+        }
+        sums = next;
+      }
+      if (!sums.has(c.target)) return invalid(`Selected values must total exactly ${c.target} (including mandatory materials).`);
+    } else {
+      const lows = parameters.map((values) => Math.min(...values));
+      const maximum = parameters.reduce((n, values) => n + Math.max(...values), 0);
+      if (maximum < c.target || lows.reduce((n, value) => n + value, 0) - Math.min(...lows) >= c.target) {
+        return invalid(`Selected values must reach ${c.target} without unnecessary materials (including mandatory materials).`);
+      }
+    }
+  }
+  return { valid: true };
+}
+
+export function generateLegalSelections(p: Prompt, budget: { maxCandidates?: number; maxVisited?: number } = {}): { candidates: string[][]; exhausted: boolean; visited: number } {
+  const maxCandidates = Math.max(1, Math.min(1024, Math.trunc(budget.maxCandidates ?? 64)) || 1);
+  const maxVisited = Math.max(1, Math.min(100000, Math.trunc(budget.maxVisited ?? 10000)) || 1);
+  const candidates: string[][] = [];
+  let visited = 0, exhausted = false;
+  const add = (ids: string[]) => {
+    if (visited >= maxVisited || candidates.length >= maxCandidates) { exhausted = true; return; }
+    visited++;
+    const validity = validateSelection(p, ids);
+    if (validity.exhausted) exhausted = true;
+    if (validity.valid) candidates.push([...ids]);
+  };
+  if (p.constraints?.kind === "interactive") {
+    const priority = { finish: 0, select: 1, unselect: 2, cancel: 3 };
+    const actions = p.constraints.actions;
+    for (const o of [...p.options].sort((a, b) => (priority[actions[a.id]!] ?? 4) - (priority[actions[b.id]!] ?? 4))) add([o.id]);
+  } else {
+    const c = p.constraints;
+    const cancel = c?.kind === "tribute" || c?.kind === "count" ? c.cancel : undefined;
+    const options = p.options.filter((o) => o.id !== cancel);
+    const max = Math.min(p.max ?? 1, options.length);
+    const walk = (start: number, ids: string[], size: number) => {
+      if (exhausted) return;
+      if (visited >= maxVisited || candidates.length >= maxCandidates) { exhausted = true; return; }
+      if (ids.length === size) { add(ids); return; }
+      if (ids.length >= 512) { exhausted = true; return; }
+      visited++;
+      for (let i = start; i <= options.length - (size - ids.length); i++) {
+        walk(i + 1, [...ids, options[i]!.id], size);
+        if (exhausted) return;
+      }
+    };
+    for (let size = Math.max(0, p.min ?? 1); size <= max && !exhausted; size++) walk(0, [], size);
+    if (cancel) add([cancel]);
+  }
+  return { candidates, exhausted, visited };
+}
 
 export interface Action { promptId: string; choose: string[]; } // option ids
 

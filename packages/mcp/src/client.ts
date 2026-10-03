@@ -1,4 +1,5 @@
 import WebSocket from "ws";
+import { validateSelection } from "@ygosim/protocol";
 import type { ClientMsg, Deck, DuelEvent, DuelState, Prompt, ServerMsg } from "@ygosim/protocol";
 
 export interface RoomInfo { roomId: string; players: string[]; status: Extract<ServerMsg, { type: "room" }>["status"] }
@@ -183,9 +184,8 @@ export class GameClient {
     const ids = new Set(p.options.map((o) => o.id));
     const bad = selected.filter((id) => !ids.has(id));
     if (bad.length) throw new Error(`invalid option id(s) ${bad.join(", ")}; valid: ${[...ids].join(", ")}`);
-    if (new Set(selected).size !== selected.length) throw new Error("choose each option at most once");
-    const min = p.min ?? 1, max = p.max ?? Math.max(1, min);
-    if (selected.length < min || selected.length > max) throw new Error(`choose between ${min} and ${max} option(s), got ${selected.length}`);
+    const validity = validateSelection(p, selected);
+    if (!validity.valid) throw new Error(validity.reason);
     this.send({ type: "action", action: { promptId: p.promptId, choose: selected } });
     this.pendingAction = true;
     this.prompt = null;

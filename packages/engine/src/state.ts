@@ -3,6 +3,7 @@ import type { CardRef, DuelEvent, DuelState, Location, PlayerIdx } from "@ygosim
 import { OcgLocation as L, OcgMessageType as M, OcgQueryFlags as Q, type OcgCardLoc, type OcgCoreSync, type OcgDuelHandle, type OcgLocPos, type OcgMessage, type OcgQueryFlags } from "ocgcore-wasm";
 import type { SqlCardDb } from "./carddb.js";
 import type { SystemStrings } from "./data.js";
+import type { SummonMetadata } from "./core.js";
 
 const zones = [L.DECK, L.HAND, L.MZONE, L.SZONE, L.GRAVE, L.REMOVED, L.EXTRA];
 const flags = Q.CODE | Q.POSITION | Q.OWNER | Q.ATTACK | Q.DEFENSE | Q.LEVEL | Q.RANK | Q.LINK | Q.COUNTERS | Q.OVERLAY_CARD | Q.IS_PUBLIC | Q.IS_HIDDEN;
@@ -29,8 +30,8 @@ const summonReasons: [number, SummonKind][] = [
   [0x200000, "xyz"], [0x10000000, "link"],
 ];
 const summonTypes: [number, SummonKind][] = [
-  [0x40, "fusion"], [0x2000, "synchro"], [0x800000, "xyz"],
-  [0x4000000, "link"],
+  [0x43000000, "fusion"], [0x45000000, "ritual"], [0x46000000, "synchro"],
+  [0x49000000, "xyz"], [0x4a000000, "pendulum"], [0x4c000000, "link"],
 ];
 
 /** Tracks physical instances separately from their public, viewer-specific identities. */
@@ -43,7 +44,7 @@ export class DuelTracker {
   chain: DuelState["chain"] = [];
   ended?: { winner: PlayerIdx | null; reason: string };
   private cards = new Map<string, CardRef>();
-  private summonMoveReasons = new Map<string, { code: number; reason?: number; from: number }>();
+  private summonMoveReasons = new Map<string, { code: number; reason?: number }>();
   private publicCards = new Set<string>();
   private reversedDeck = false;
   private visibleDeckTop: [boolean, boolean] = [false, false];
@@ -123,11 +124,9 @@ export class DuelTracker {
       case M.MOVE: {
         this.summonMoveReasons.delete(key(m.from));
         this.summonMoveReasons.delete(key(m.to));
-        // ocgcore-wasm 0.1.2 omits this wire field; accept it when supplied
-        // by a wrapper that preserves it. Track the origin for Extra Deck fallback.
-        const reason = (m as typeof m & { reason?: number }).reason;
+        const reason = (m as typeof m & SummonMetadata).reason;
         if ((m.to.location & L.MZONE) !== 0) {
-          this.summonMoveReasons.set(key(m.to), { code: m.card & 0x7fffffff, reason, from: m.from.location });
+          this.summonMoveReasons.set(key(m.to), { code: m.card & 0x7fffffff, reason });
         }
         return [this.move(m.from, m.to, m.card)];
       }
@@ -147,12 +146,12 @@ export class DuelTracker {
         const moved = this.summonMoveReasons.get(key(m));
         this.summonMoveReasons.delete(key(m));
         const source = moved?.code === card.code ? moved : undefined;
-        const reason = (m as typeof m & { reason?: number }).reason ?? source?.reason;
-        const type = this.db.raw.get(card.code ?? 0)?.type ?? 0;
-        const kind = reason !== undefined
-          ? summonReasons.find(([flag]) => (reason & flag) !== 0)?.[1] ?? "special"
-          : source && (source.from & L.EXTRA) !== 0
-            ? summonTypes.find(([flag]) => (type & flag) !== 0)?.[1] ?? "special"
+        const { reason: summonReason, summonType } = m as typeof m & SummonMetadata;
+        const reason = summonReason ?? source?.reason;
+        const kind = summonType !== undefined
+          ? summonTypes.find(([type]) => (summonType & 0xff000000) === type)?.[1] ?? "special"
+          : reason !== undefined
+            ? summonReasons.find(([flag]) => (reason & flag) !== 0)?.[1] ?? "special"
             : "special";
         return [{ t: "summon", card, kind }];
       }

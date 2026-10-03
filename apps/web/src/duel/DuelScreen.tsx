@@ -1,6 +1,7 @@
 import { AnimatePresence, motion } from "framer-motion";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentKind, CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOption, ServerMsg } from "@ygosim/protocol";
+import { validateSelection } from "@ygosim/protocol";
 import { isMock } from "../api";
 import { isMuted, setMuted, uiClick } from "../sfx";
 import { createMockConn } from "../mock";
@@ -103,13 +104,13 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
 
   // Like Master Duel's auto-chain: skip chain windows where passing is the only choice.
   useEffect(() => {
-    if (!autoPass || !prompt || prompt.kind !== "select_chain") return;
+    if (view.fatalError || !autoPass || !prompt || prompt.kind !== "select_chain") return;
     if (prompt.options.some((o) => o.card)) return;
     const pass = prompt.options[0];
     if (!pass) return;
     const t = setTimeout(() => respond(prompt.promptId, [pass.id]), 120);
     return () => clearTimeout(t);
-  }, [prompt, autoPass, respond]);
+  }, [prompt, autoPass, respond, view.fatalError]);
 
   // uid -> options that reference that card
   const byCard = useMemo(() => {
@@ -120,7 +121,10 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const selectable = useMemo(() => new Set(byCard.keys()), [byCard]);
   const selectedUids = useMemo(() => new Set(prompt?.options.filter((o) => selected.includes(o.id) && o.card).map((o) => o.card!.uid)), [prompt, selected]);
 
-  const submit = (ids: string[]) => { uiClick(); if (prompt) respond(prompt.promptId, ids); setMenu(null); setPile(null); };
+  const submit = (ids: string[]) => {
+    if (view.fatalError || !prompt || !validateSelection(prompt, ids).valid) return;
+    uiClick(); respond(prompt.promptId, ids); setMenu(null); setPile(null);
+  };
   const toggle = (id: string) => setSelected((s) => (s.includes(id) ? s.filter((x) => x !== id) : s.length < (prompt?.max ?? 1) ? [...s, id] : s));
 
   const onCard = (c: CardRef, at?: { x: number; y: number }) => {
@@ -166,8 +170,18 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     return re ? prompt.options.find((o) => !o.card && re.test(o.label)) : undefined;
   };
 
+  if (view.fatalError) {
+    return (
+      <div className="duel-wait" role="alert">
+        <h2>The duel stopped</h2>
+        <p className="err" style={{ maxWidth: 520, textAlign: "center" }}>{view.fatalError}</p>
+        <button className="primary" onClick={onExit}>Return to menu</button>
+      </div>
+    );
+  }
+
   if (view.roomStatus === "siding") {
-    return <SideDeck deck={deck} score={view.score} game={view.game} onDone={(d) => send({ type: "side_deck", deck: d })} />;
+    return <SideDeck deck={deck} score={view.score} game={view.game} error={view.error} onDone={(d) => { clearError(); send({ type: "side_deck", deck: d }); }} />;
   }
 
   if (!state && view.roomId && (launch.mode === "agent" || launch.mode === "watch" || launch.mode === "create")) {
@@ -248,7 +262,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
               {pileCards.map((c) => {
                 const opts = byCard.get(c.uid);
                 return (
-                  <button key={c.uid} className={`pile-card${opts ? " selectable" : ""}${selectedUids.has(c.uid) ? " selected" : ""}`}
+                  <button key={c.uid} data-card-uid={c.uid} className={`pile-card${opts ? " selectable" : ""}${selectedUids.has(c.uid) ? " selected" : ""}`}
                     onMouseEnter={() => setHover(c)} onClick={() => (opts ? onCard(c) : c.code !== undefined && setPinned(c.code))}>
                     {c.code !== undefined ? <CardFace code={c.code} /> : <div className="card-back small" />}
                   </button>

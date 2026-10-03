@@ -5,6 +5,20 @@
   "scripts": {
     "dev": "pnpm -r --parallel dev",
     "build": "pnpm -r build",
-    "test": "pnpm -r test"
+    "test": "pnpm -r --workspace-concurrency=1 test",
+    "test:e2e": "playwright test",
+    "test:e2e:typecheck": "tsc --noEmit -p test/e2e/tsconfig.json",
+    "test:integration": "YGOSIM_TEST_ENGINE=1 pnpm --filter @ygosim/server test",
+    "test:release": "pnpm test && pnpm test:integration && pnpm --filter @ygosim/engine lint && pnpm --filter @ygosim/server typecheck && pnpm --filter @ygosim/mcp typecheck && pnpm --filter @ygosim/web build && pnpm test:e2e:typecheck && pnpm test:e2e",
+    "test:reference": "bash scripts/test-reference.sh",
+    "test:extended": "bash scripts/test-extended.sh",
+    "test:stress": "pnpm --filter @ygosim/server exec tsx ../../packages/engine/scripts/rules-stress.ts ../../artifacts/bot-matrix.json",
+    "test:audit": "pnpm --filter @ygosim/server exec tsx ../../packages/engine/scripts/audit-scripts.ts",
+    "test:fuzz": "pnpm --filter @ygosim/server exec tsx ../../packages/engine/scripts/fuzz-duels.ts"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.63.0",
+    "@types/node": "^26.6.3",
+    "typescript": "^7.0.2"
   }
 }

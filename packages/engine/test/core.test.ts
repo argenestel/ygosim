@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { normalizeCoreMessageBuffer } from "../src/core.js";
+import { normalizeCoreMessageBuffer, preserveCoreMessageMetadata } from "../src/core.js";
+import { OcgMessageType as M, OcgLocation as L, type OcgMessage } from "ocgcore-wasm";
 
 function frame(payload: number[]): number[] {
   return [payload.length & 0xff, (payload.length >>> 8) & 0xff, (payload.length >>> 16) & 0xff, (payload.length >>> 24) & 0xff, ...payload];
@@ -18,6 +19,18 @@ function location(controller: number, zone: number, sequence: number, position: 
 }
 
 describe("ocgcore message compatibility", () => {
+  it("preserves MOVE reason without altering the wire or decoded locations", () => {
+    const message: OcgMessage = { type: M.MOVE, card: 123,
+      from: { controller: 0, location: L.HAND, sequence: 2, position: 1 },
+      to: { controller: 0, location: L.MZONE, sequence: 3, position: 1 } };
+    const raw = new Uint8Array(frame([M.MOVE, ...u32(123), ...location(0, L.HAND, 2, 1), ...location(0, L.MZONE, 3, 1), ...u32(0x100800)]));
+    const before = raw.slice();
+    expect(preserveCoreMessageMetadata(raw, [message])).toEqual([{ ...message, reason: 0x100800 }]);
+    expect(raw).toEqual(before);
+    expect(message).not.toHaveProperty("reason");
+    expect(preserveCoreMessageMetadata(raw.subarray(0, raw.length - 1), [message])).toEqual([message]);
+    expect(preserveCoreMessageMetadata(raw, [{ type: M.SPSUMMONED }])).toEqual([{ type: M.SPSUMMONED }]);
+  });
   it("widens the SHUFFLE_SET_CARD count without changing card locations", () => {
     const from = [location(0, 8, 1, 8), location(1, 8, 4, 2)];
     const to = [location(0, 0, 0, 0), location(0, 0, 0, 0)];

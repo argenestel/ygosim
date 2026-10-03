@@ -1,4 +1,5 @@
 import type { Action, DuelState, Prompt, PromptOption, CardRef } from "@ygosim/protocol";
+import { generateLegalSelections, validateSelection } from "@ygosim/protocol";
 
 export type AiLevel = "easy" | "normal" | "hard";
 
@@ -9,36 +10,29 @@ export interface Bot {
 }
 
 export function bounds(p: Prompt): { min: number; max: number } {
-  const n = p.options.length;
-  const min = Math.min(Math.max(p.min ?? 1, 0), n);
-  const max = Math.max(Math.min(p.max ?? Math.max(min, 1), n), min);
+  const min = Math.max(p.min ?? 1, 0);
+  const max = p.max ?? 1;
   return { min, max };
 }
 
-/** True if an action is a structurally legal answer to the prompt. */
 export function isLegal(p: Prompt, a: Action): boolean {
   if (!a || a.promptId !== p.promptId || !Array.isArray(a.choose)) return false;
-  const { min, max } = bounds(p);
-  if (a.choose.length < min || a.choose.length > max) return false;
-  const ids = new Set(p.options.map((o) => o.id));
-  if (new Set(a.choose).size !== a.choose.length) return false;
-  return a.choose.every((c) => typeof c === "string" && ids.has(c));
+  return a.choose.every((c) => typeof c === "string") && validateSelection(p, a.choose).valid;
 }
 
 const PASSIVE = /\b(pass|cancel|no|end|skip|done|finish|decline|don't)\b/i;
 
-/** Safe default used on timeout: passive option when single-choice, else first `min` options. */
 export function defaultAction(p: Prompt): Action {
-  const { min } = bounds(p);
-  if (min === 0) return { promptId: p.promptId, choose: [] };
-  if (min === 1) {
+  const candidates = generateLegalSelections(p).candidates;
+  if (!candidates.length) throw new Error("no acceptable action within selection search budget");
+  if (p.constraints?.kind !== "interactive") {
     const passive =
       p.kind === "idle" || p.kind === "battle_idle"
         ? p.options.find((o) => /end|phase|pass/i.test(o.id + " " + o.label))
         : p.options.find((o) => PASSIVE.test(o.id) || PASSIVE.test(o.label));
-    if (passive && p.kind !== "rps" && p.kind !== "first_turn") return { promptId: p.promptId, choose: [passive.id] };
+    if (passive && p.kind !== "rps" && p.kind !== "first_turn" && validateSelection(p, [passive.id]).valid) return { promptId: p.promptId, choose: [passive.id] };
   }
-  return { promptId: p.promptId, choose: p.options.slice(0, Math.max(min, 1)).map((o) => o.id) };
+  return { promptId: p.promptId, choose: candidates[0]! };
 }
 
 /** Coerce any candidate into a legal action (falls back to defaultAction). */

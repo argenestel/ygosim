@@ -233,7 +233,8 @@ function boundedCardSelection(message: {
   const max = Math.min(bounded(message.max), message.selects.length);
   const min = Math.min(requestedMin, max);
   if (message.can_cancel) cards.push(option("cancel", "Cancel selection"));
-  const p = prompt(context, "select_card", "Select card(s).", cards, message.can_cancel ? 0 : min, max);
+  const p = prompt(context, "select_card", "Select card(s).", cards, min, max);
+  p.constraints = { kind: "count", ...(message.can_cancel ? { cancel: "cancel" } : {}) };
   return {
     player: playerId,
     prompt: p,
@@ -317,8 +318,13 @@ function tributePrompt(
   // `min` and `max` are tribute values in the core; release_param is the
   // weight of each card.  The UI bounds are cardinality bounds, while the
   // callback below enforces the weighted lower bound exactly.
-  const uiMin = message.can_cancel || message.min === 0 ? 0 : message.selects.some((c) => c.release_param >= message.min) ? 1 : Math.min(1, maxCards);
+  const uiMin = message.min === 0 ? 0 : Math.min(1, maxCards);
   const p = prompt(context, "select_tribute", "Select tributes.", options, uiMin, maxCards);
+  p.constraints = {
+    kind: "tribute", required: message.min,
+    values: Object.fromEntries(message.selects.map((loc, index) => [String(index), loc.release_param])),
+    ...(message.can_cancel || message.min === 0 ? { cancel: "cancel" } : {}),
+  };
   return {
     player: playerId,
     prompt: p,
@@ -401,6 +407,11 @@ function sumPrompt(
   const max = message.max ? Math.min(bounded(message.max), options.length) : options.length;
   const p = prompt(context, "select_sum", `Select cards totaling ${message.amount}.${mustText}`, options, min, Math.max(min, max));
   const exact = message.select_max === 0;
+  p.constraints = {
+    kind: "sum", target: message.amount, mode: exact ? "exact" : "at_least",
+    values: Object.fromEntries(message.selects.map((loc, index) => [String(index), sumParameters(loc.amount)])),
+    mandatory: message.selects_must.map((loc) => sumParameters(loc.amount)),
+  };
   return {
     player: playerId,
     prompt: p,
@@ -435,6 +446,11 @@ function counterPrompt(
     }
   });
   const p = prompt(context, "select_counter", `Remove ${message.count} ${counterName}.`, options, 1, message.cards.length);
+  p.constraints = {
+    kind: "sum", target: message.count, mode: "exact", mandatory: [],
+    values: Object.fromEntries([...choiceMap].map(([id, choice]) => [id, [choice.amount]])),
+    exclusiveGroups: message.cards.map((_, index) => [...choiceMap].filter(([, choice]) => choice.card === index).map(([id]) => id)),
+  };
   return {
     player: playerId,
     prompt: p,
@@ -598,7 +614,8 @@ function sortPrompt(
     return option(String(index), rendered.label, rendered.card);
   });
   options.push(option("keep", "Keep current order"));
-  const p = prompt(context, "select_card", `Choose the ${chain ? "chain" : "card"} order.`, options, 1, message.cards.length);
+  const p = prompt(context, "select_card", `Choose the ${chain ? "chain" : "card"} order.`, options, message.cards.length, message.cards.length);
+  p.constraints = { kind: "count", cancel: "keep" };
   return {
     player: playerId,
     prompt: p,
@@ -643,6 +660,10 @@ function unselectPrompt(
   if (message.can_finish) { options.push(option("finish", "Finish selection")); actions.set("finish", null); }
   if (message.can_cancel) { options.push(option("cancel", "Cancel selection")); actions.set("cancel", null); }
   const p = prompt(context, "select_card", "Select or unselect a card.", options, 1, 1);
+  p.constraints = {
+    kind: "interactive",
+    actions: Object.fromEntries(options.map((o) => [o.id, o.id.startsWith("select:") ? "select" : o.id.startsWith("unselect:") ? "unselect" : o.id === "finish" ? "finish" : "cancel"])),
+  };
   return {
     player: playerId,
     prompt: p,

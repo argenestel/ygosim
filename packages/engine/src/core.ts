@@ -1,4 +1,4 @@
-import { OcgMessageType, type OcgCoreSync, type OcgDuelHandle } from "ocgcore-wasm";
+import { OcgMessageType, type OcgCoreSync, type OcgDuelHandle, type OcgMessage } from "ocgcore-wasm";
 import createCore from "../vendor/ocgcore/index.mjs";
 
 /** The Emscripten object captured by ocgcore-wasm's runtime callback. */
@@ -8,6 +8,29 @@ interface NativeModule {
   _free(pointer: number): void;
   _ocgapiDuelGetMessage(handle: number, length: number): number;
   getValue(pointer: number, type: "i32"): number;
+  _ygosimSummonType?(handle: number, controller: number, location: number, sequence: number, code: number): number;
+}
+
+export type SummonMetadata = { reason?: number; summonType?: number };
+
+export function preserveCoreMessageMetadata(raw: Uint8Array, messages: OcgMessage[]): OcgMessage[] {
+  const frames: Uint8Array[] = [];
+  let offset = 0;
+  while (offset < raw.byteLength) {
+    if (offset + U32 > raw.byteLength) return messages;
+    const length = readU32(raw, offset);
+    const start = offset + U32, end = start + length;
+    if (length < 1 || end > raw.byteLength) return messages;
+    frames.push(raw.subarray(start, end));
+    offset = end;
+  }
+  if (frames.length !== messages.length || frames.some((frame, i) => frame[0] !== messages[i]!.type)) return messages;
+  return messages.map((message, i) => {
+    const frame = frames[i]!;
+    return message.type === OcgMessageType.MOVE && frame.byteLength === 29
+      ? { ...message, reason: readU32(frame, 25) }
+      : message;
+  });
 }
 
 const U32 = 4;
@@ -183,7 +206,8 @@ export async function createCompatibleCore(options: Record<string, unknown> = {}
   const nativeGetter = module._ocgapiDuelGetMessage;
   const decoder = core.duelGetMessage.bind(core);
   core.duelGetMessage = (handle: OcgDuelHandle) => {
-    const normalized = normalizeCoreMessageBuffer(captureRaw(module!, nativeGetter, handle));
+    const raw = captureRaw(module!, nativeGetter, handle);
+    const normalized = normalizeCoreMessageBuffer(raw);
     if (normalized.byteLength === 0) return decoder(handle);
 
     const pointer = module!._malloc(normalized.byteLength);
@@ -195,7 +219,11 @@ export async function createCompatibleCore(options: Record<string, unknown> = {}
       return pointer;
     };
     try {
-      return decoder(handle);
+      return preserveCoreMessageMetadata(raw, decoder(handle)).map(message => {
+        if (message.type !== OcgMessageType.SPSUMMONING || !module!._ygosimSummonType) return message;
+        const summonType = module!._ygosimSummonType(nativeHandle(handle), message.controller, message.location, message.sequence, message.code);
+        return summonType ? { ...message, summonType } : message;
+      });
     } finally {
       module!._ocgapiDuelGetMessage = originalGetter;
       module!._free(pointer);

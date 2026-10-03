@@ -28,6 +28,7 @@ interface Props {
 
 const BASE_CAM = new THREE.Vector3(0, 8.4, 7.2);
 const LOOK = new THREE.Vector3(0, 0, 0.75);
+const LOW_GRAPHICS = import.meta.env.DEV && import.meta.env.VITE_E2E_LOW_GRAPHICS === "1";
 
 function CameraRig({ shake }: { shake: number }) {
   const { camera, size } = useThree();
@@ -194,6 +195,19 @@ function PlaceTiles({ places, onPlace }: { places: PlaceTarget[]; onPlace: (id: 
 function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake, places, onPlace }: Props) {
   const targets = useMemo(() => worldTargets(state.cards, state.you), [state.cards, state.you]);
   const clock = useThree((s) => s.clock);
+  useFrame(({ camera, gl }) => {
+    if (!import.meta.env.DEV) return;
+    const bounds = gl.domElement.getBoundingClientRect();
+    const project = (x: number, y: number, z: number) => {
+      const p = new THREE.Vector3(x, y, z).project(camera);
+      return { x: bounds.left + (p.x + 1) * bounds.width / 2, y: bounds.top + (1 - p.y) * bounds.height / 2 };
+    };
+    (window as unknown as { __ygosimBoard?: unknown }).__ygosimBoard = {
+      lowGraphics: LOW_GRAPHICS,
+      cards: Object.fromEntries([...targets].map(([uid, t]) => [uid, project(t.x, t.y, t.z)])),
+      places: Object.fromEntries((places ?? []).map(p => [p.id, project(p.x, 0.03, p.z)])),
+    };
+  });
 
   const visible = useMemo(() => {
     const byPile = new Map<string, CardRef[]>();
@@ -237,7 +251,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
       <color attach="background" args={["#04060d"]} />
       <fog attach="fog" args={["#04060d", 14, 26]} />
       <ambientLight intensity={0.55} />
-      <directionalLight position={[3, 10, 6]} intensity={1.6} castShadow shadow-mapSize={[1024, 1024]} />
+      <directionalLight position={[3, 10, 6]} intensity={1.6} castShadow={!LOW_GRAPHICS} shadow-mapSize={[1024, 1024]} />
       <pointLight position={[0, 3, 0]} intensity={5} color="#e8d2a0" distance={8} />
       <Table />
       <Sparkles count={40} scale={[14, 4, 12]} position={[0, 2, 0]} size={1.8} speed={0.2} color="#d6c39a" opacity={0.35} />
@@ -269,10 +283,10 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
         }
         return null;
       })}
-      <EffectComposer>
+      {!LOW_GRAPHICS && <EffectComposer>
         <Bloom luminanceThreshold={0.7} luminanceSmoothing={0.2} intensity={1.15} mipmapBlur />
         <Vignette offset={0.25} darkness={0.75} />
-      </EffectComposer>
+      </EffectComposer>}
     </>
   );
 }
@@ -280,7 +294,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
 export function Board3D(props: Props) {
   return (
     <div className="board3d">
-      <Canvas shadows dpr={[1, 2]} camera={{ fov: 42, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
+      <Canvas shadows={!LOW_GRAPHICS} dpr={[1, 2]} camera={{ fov: 42, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
         onPointerMissed={() => props.onHover(null)}>
         <Suspense fallback={null}><Scene {...props} /></Suspense>
       </Canvas>

@@ -5,12 +5,13 @@
   "image": "emscripten/emsdk:4.0.9",
   "patches": [
     "synchronous Node loader",
-    "upstream 3c7d293 card-data offsets"
+    "upstream 3c7d293 card-data offsets",
+    "read-only summon-type bridge"
   ],
   "sha256": {
-    "ocgcore.sync.wasm": "604b998460366f43f9c1a244009549165d13e160dff9bcaaf8a6ed588754d0cc",
-    "ocgcore.sync.mjs": "71ff89cb5ae1fbb72a77fd97ecf407b0d507417ace27ea894fe4611be8011f60",
+    "ocgcore.sync.wasm": "9c569299b40d1fd42f29d118ef717385424fdc87ac57973b50b59816f8778e30",
+    "ocgcore.sync.mjs": "43e02e6410178555fbc4cdea8410e801bd03eee23f5e48ec17b2c4658f3cb567",
     "index.mjs": "697d31cd9f58ae158bccefb84e87a0bfd45bb3e33b406e39367ac294259b2c72",
-    "source.tar.gz": "1f96786d81cafa3f383466f3bc7f63f699e0fad30a84a3259315fbf695656c24"
+    "source.tar.gz": "3dab7ff5ecc75cef10ec9a2a65a67da8b1eedeb06c19d767d31ff75430f8a67a"
   }
 }

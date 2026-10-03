@@ -140,6 +140,41 @@ describe("shared tools against a fake game server", () => {
     await flush();
     expect(messages.at(-1)).toEqual({ type: "action", action: { promptId: "prompt1", choose: [] } });
   });
+  it("explains weighted constraints and rejects insufficient tributes without consuming the prompt", async () => {
+    await call("create_room"); await call("wait_for_turn");
+    const tribute: Prompt = { promptId: "tribute", kind: "select_tribute", text: "Select tributes", min: 1, max: 2,
+      options: ["a", "b", "double", "cancel"].map(id => ({ id, label: id })),
+      constraints: { kind: "tribute", required: 2, values: { a: 1, b: 1, double: 2 }, cancel: "cancel" } };
+    send({ type: "prompt", prompt: tribute, state }); await flush();
+    expect((await call("get_state")).text).toContain('"required":2');
+    expect((await call("act", { choose: ["a"], wait: false })).error).toContain("need at least 2");
+    expect(session.client.prompt?.promptId).toBe("tribute");
+    expect(messages.filter(msg => msg.type === "action")).toHaveLength(0);
+    expect((await call("act", { choose: ["a", "b"], wait: false })).ok).toBe(true);
+    await flush();
+    send({ type: "prompt", prompt: tribute, state }); await flush();
+    expect((await call("act", { choose: ["double"], wait: false })).ok).toBe(true);
+    await flush();
+    send({ type: "prompt", prompt: tribute, state }); await flush();
+    expect((await call("act", { choose: ["cancel"], wait: false })).ok).toBe(true);
+  });
+
+  it("validates mandatory sums and atomic interactive finish/cancel actions", async () => {
+    await call("create_room"); await call("wait_for_turn");
+    send({ type: "prompt", state, prompt: { promptId: "sum", kind: "select_sum", text: "Sum", min: 0, max: 1,
+      options: [{ id: "a", label: "a" }], constraints: { kind: "sum", target: 8, mode: "exact", mandatory: [[2, 4]], values: { a: [4, 6] } } } });
+    await flush();
+    expect((await call("act", { choose: [], wait: false })).ok).toBe(false);
+    expect((await call("act", { choose: ["a"], wait: false })).ok).toBe(true);
+    await flush();
+    send({ type: "prompt", state, prompt: { promptId: "interactive", kind: "select_card", text: "Select", min: 0, max: 3,
+      options: ["select:0", "unselect:0", "finish", "cancel"].map(id => ({ id, label: id })),
+      constraints: { kind: "interactive", actions: { "select:0": "select", "unselect:0": "unselect", finish: "finish", cancel: "cancel" } } } });
+    await flush();
+    expect((await call("act", { choose: [], wait: false })).ok).toBe(false);
+    expect((await call("act", { choose: ["finish", "cancel"], wait: false })).ok).toBe(false);
+    expect((await call("act", { choose: ["finish"], wait: false })).ok).toBe(true);
+  });
   it("restores a rejected action's prompt for retry", async () => {
     rejection = true;
     await call("create_room"); await call("wait_for_turn");

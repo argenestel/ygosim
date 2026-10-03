@@ -9,12 +9,12 @@ const ready = new Map<number, THREE.Texture>();
 export function loadFront(code: number): Promise<THREE.Texture> {
   let p = fronts.get(code);
   if (!p) {
-    p = loader.loadAsync(`/api/img/${code}`).then((t) => {
+    p = loader.loadAsync(`/api/img/small/${code}`).then((t) => {
       t.colorSpace = THREE.SRGBColorSpace;
       t.anisotropy = 8;
       ready.set(code, t);
       return t;
-    });
+    }).catch((error) => { fronts.delete(code); throw error; });
     fronts.set(code, p);
   }
   return p;

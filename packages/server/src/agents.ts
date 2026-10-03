@@ -47,12 +47,13 @@ export async function launchAgent(
   agent: AgentKind,
   roomId: string,
   seat: number = 1,
+  port = Number(process.env.PORT ?? 7777),
 ): Promise<{ ok: boolean; pid?: number; error?: string }> {
   if (agent === "bot") {
     return { ok: true }; // Bot doesn't need to be launched
   }
 
-  if (!process.env.YGOSIM_ALLOW_AGENT_LAUNCH) {
+  if (process.env.YGOSIM_ALLOW_AGENT_LAUNCH !== "1") {
     return { ok: false, error: "Agent launch disabled (set YGOSIM_ALLOW_AGENT_LAUNCH=1)" };
   }
 
@@ -64,6 +65,7 @@ export async function launchAgent(
 
   try {
     const prompt = `Join ygosim room ${roomId} (seat ${seat}) and play the duel to the end using the ygosim tools.`;
+    const options = { env: { ...process.env, YGOSIM_URL: `ws://localhost:${port}` }, stdio: "ignore" as const };
     let child: ChildProcess;
 
     if (agent === "claude") {
@@ -78,7 +80,7 @@ export async function launchAgent(
         mpcPath,
         "--allowedTools",
         "mcp__ygosim__*",
-      ]);
+      ], options);
     } else if (agent === "codex") {
       if (!commandExists("codex")) {
         return { ok: false, error: "Codex not installed" };
@@ -93,7 +95,7 @@ export async function launchAgent(
         "-c", 'mcp_servers.ygosim.default_tools_approval_mode="approve"',
         "-c", "mcp_servers.ygosim.tool_timeout_sec=660",
         prompt,
-      ]);
+      ], options);
     } else {
       return { ok: false, error: `Unknown agent: ${agent}` };
     }
@@ -101,6 +103,11 @@ export async function launchAgent(
     // Set environment for agent
 
     agentProcesses.set(procKey, { process: child, kind: agent, roomId, seat });
+    const release = () => {
+      if (agentProcesses.get(procKey)?.process === child) agentProcesses.delete(procKey);
+    };
+    child.once("exit", release);
+    child.once("error", release);
 
     return { ok: true, pid: child.pid };
   } catch (e) {
@@ -114,7 +121,9 @@ export function stopAgent(roomId: string, seat: number = 1): void {
   if (proc) {
     try {
       proc.process.kill("SIGTERM");
-      setTimeout(() => proc.process.kill("SIGKILL"), 5000);
+      const timer = setTimeout(() => { if (proc.process.exitCode === null && proc.process.signalCode === null) proc.process.kill("SIGKILL"); }, 5000);
+      timer.unref();
+      proc.process.once("exit", () => clearTimeout(timer));
     } catch {
       // Process already dead
     }
@@ -129,7 +138,9 @@ export function stopRoomAgents(roomId: string): void {
       if (proc) {
         try {
           proc.process.kill("SIGTERM");
-          setTimeout(() => proc.process.kill("SIGKILL"), 5000);
+          const timer = setTimeout(() => { if (proc.process.exitCode === null && proc.process.signalCode === null) proc.process.kill("SIGKILL"); }, 5000);
+          timer.unref();
+          proc.process.once("exit", () => clearTimeout(timer));
         } catch {
           // Process already dead
         }

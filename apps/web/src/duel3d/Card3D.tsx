@@ -47,10 +47,12 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
   const [front, setFront] = useState<THREE.Texture>(() => (card.code !== undefined ? readyFront(card.code) ?? placeholderTexture() : backTexture()));
   useEffect(() => {
     if (card.code === undefined) { setFront(backTexture()); return; }
+    if (!visible || faceDown) return;
+    setFront(readyFront(card.code) ?? placeholderTexture());
     let alive = true;
     loadFront(card.code).then((t) => alive && setFront(t)).catch(() => {});
     return () => { alive = false; };
-  }, [card.code]);
+  }, [card.code, visible, faceDown]);
 
   const mats = useMemo(() => {
     return [edgeMat, edgeMat, edgeMat, edgeMat,

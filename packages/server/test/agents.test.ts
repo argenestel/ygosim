@@ -4,7 +4,8 @@ import { buildApi } from "../src/server.js";
 import { Lobby } from "../src/lobby.js";
 
 import { spawn } from "node:child_process";
-vi.mock("node:child_process", () => ({ execSync: vi.fn(), spawn: vi.fn(() => ({ pid: 123 })) }));
+import { EventEmitter } from "node:events";
+vi.mock("node:child_process", () => ({ execSync: vi.fn(), spawn: vi.fn(() => Object.assign(new EventEmitter(), { pid: 123 })) }));
 afterEach(() => { vi.unstubAllEnvs(); vi.clearAllMocks(); });
 
 describe("Agent Management", () => {
@@ -50,7 +51,9 @@ describe("Agent Management", () => {
    vi.stubEnv("YGOSIM_ALLOW_AGENT_LAUNCH", "1");
    const path = '/path/with "quotes"/index.js';
    expect(await launchAgent(path, "codex", "codex-test")).toEqual({ ok: true, pid: 123 });
-   expect(spawn).toHaveBeenCalledWith("codex", [
+   const call = vi.mocked(spawn).mock.calls.at(-1)!;
+   expect(call[0]).toBe("codex");
+   expect(call[1]).toEqual([
      "exec", "--skip-git-repo-check", "-s", "read-only",
      "-c", 'mcp_servers.ygosim.command="node"',
      "-c", `mcp_servers.ygosim.args=${JSON.stringify([path])}`,
@@ -58,9 +61,31 @@ describe("Agent Management", () => {
      "-c", "mcp_servers.ygosim.tool_timeout_sec=660",
      "Join ygosim room codex-test (seat 1) and play the duel to the end using the ygosim tools.",
    ]);
+   expect(call[2]?.env?.YGOSIM_URL).toBe("ws://localhost:7777");
+   expect(call[2]?.stdio).toBe("ignore");
  });
  it("pre-allows Claude's ygosim tools", async () => {
    vi.stubEnv("YGOSIM_ALLOW_AGENT_LAUNCH", "1");
    expect((await launchAgent("/mcp.json", "claude", "claude-test")).ok).toBe(true);
-   expect(spawn).toHaveBeenCalledWith("claude", ["-p", expect.any(String), "--mcp-config", "/mcp.json", "--allowedTools", "mcp__ygosim__*"]);
+   const call = vi.mocked(spawn).mock.calls.at(-1)!;
+   expect(call[0]).toBe("claude");
+   expect(call[1]).toEqual(["-p", expect.any(String), "--mcp-config", "/mcp.json", "--allowedTools", "mcp__ygosim__*"]);
+   expect(call[2]?.env?.YGOSIM_URL).toBe("ws://localhost:7777");
+   expect(call[2]?.stdio).toBe("ignore");
+ });
+ it("requires the exact enabling value", async () => {
+   vi.stubEnv("YGOSIM_ALLOW_AGENT_LAUNCH", "0");
+   expect((await launchAgent("/mcp.json", "claude", "disabled-test")).ok).toBe(false);
+   expect(vi.mocked(spawn).mock.calls.length).toBe(0);
+ });
+ it("releases exited and failed process reservations", async () => {
+   vi.stubEnv("YGOSIM_ALLOW_AGENT_LAUNCH", "1");
+   for (const event of ["exit", "error"]) {
+     const room = `lifecycle-${event}`;
+     expect((await launchAgent("/mcp.json", "codex", room, 0, 54321)).ok).toBe(true);
+     expect((await launchAgent("/mcp.json", "codex", room, 0, 54321)).ok).toBe(false);
+     const child = vi.mocked(spawn).mock.results.at(-1)!.value as EventEmitter;
+     child.emit(event, event === "error" ? new Error("spawn failed") : 0);
+     expect((await launchAgent("/mcp.json", "codex", room, 0, 54321)).ok).toBe(true);
+   }
  });
