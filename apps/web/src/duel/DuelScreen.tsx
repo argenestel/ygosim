@@ -16,6 +16,7 @@ import { DuelLog } from "./DuelLog";
 import { ChainCallout, ChainPanel } from "./ChainPanel";
 import { AgentWaiting } from "./AgentWaiting";
 import { useDuel } from "./useDuel";
+import { HandBar } from "./HandBar";
 
 export type DuelLaunch = (
   | { mode: "ai"; level: "easy" | "normal" | "hard" }
@@ -46,13 +47,22 @@ function useTween(target: number, ms = 700) {
   return v;
 }
 
-function LpBar({ name, lp, mine, active, hits }: { name: string; lp: number; mine: boolean; active: boolean; hits: { id: number; amount: number; heal: boolean; cost?: boolean }[] }) {
+type Counts = { hand: number; deck: number; grave: number; banished: number; extra: number };
+
+function LpBar({ name, lp, mine, active, hits, counts }: { name: string; lp: number; mine: boolean; active: boolean; hits: { id: number; amount: number; heal: boolean; cost?: boolean }[]; counts: Counts }) {
   const shown = useTween(lp);
   return (
     <div className={`lp ${mine ? "me" : "op"}${active ? " active" : ""}`}>
-      <div className="lp-name">{name}</div>
+      <div className="lp-head">
+        <span className="lp-avatar">{(name || "?")[0].toUpperCase()}</span>
+        <div className="lp-name">{name}{active && <span className="lp-turn">{mine ? "Your turn" : "Their turn"}</span>}</div>
+      </div>
       <div className="lp-num">{shown}</div>
       <div className="lp-track"><div className="lp-fill" style={{ width: `${Math.max(0, Math.min(1, shown / 8000)) * 100}%` }} /></div>
+      <div className="lp-counts">
+        <span title="Hand">✋ {counts.hand}</span><span title="Deck">▤ {counts.deck}</span><span title="Graveyard">⚰ {counts.grave}</span>
+        <span title="Banished">⊘ {counts.banished}</span><span title="Extra Deck">✦ {counts.extra}</span>
+      </div>
       <AnimatePresence>
         {hits.map((h) => (
           <motion.div key={h.id} className={`lp-pop${h.heal ? " heal" : h.cost ? " cost" : ""}`} initial={{ opacity: 0, y: 0, scale: 0.6 }} animate={{ opacity: 1, y: mine ? -46 : 46, scale: 1.2 }} exit={{ opacity: 0 }} transition={{ duration: 0.5 }}>
@@ -211,12 +221,18 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   }
 
   const you = state.you, opp = (1 - you) as PlayerIdx;
+  const countsOf = (p: PlayerIdx): Counts => {
+    const n = (l: CardRef["location"]) => state.cards.filter((c) => c.controller === p && c.location === l).length;
+    return { hand: n("hand"), deck: n("deck"), grave: n("grave"), banished: n("banished"), extra: n("extra") };
+  };
+  const myHand = state.cards.filter((c) => c.controller === you && c.location === "hand");
+  const spectating = launch.mode === "spectate" || launch.mode === "watch";
   const pileCards = pile ? state.cards.filter((c) => c.controller === pile.owner && c.location === pile.loc).sort((a, b) => b.sequence - a.sequence) : [];
 
   return (
     <div className="duel">
       <div className="duel-top">
-        <LpBar name={view.players[opp] ?? "Opponent"} lp={state.lp[opp]} mine={false} active={state.turnPlayer === opp} hits={hits(opp)} />
+        <LpBar name={view.players[opp] ?? "Opponent"} lp={state.lp[opp]} mine={false} active={state.turnPlayer === opp} hits={hits(opp)} counts={countsOf(opp)} />
         <div className="phase-bar">
           {view.match === "match" && view.score && <span className="score">G{(view.game ?? 0) + 1} · {view.score[you]}–{view.score[opp]}</span>}
           <span className="turn-no">T{state.turn}</span>
@@ -241,10 +257,11 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       {isMock && <div className="demo-flag">Scripted demo — not real rules. Run the server for real duels.</div>}
       <Inspector code={hover?.code ?? pinned} />
 
-      <Board3D places={places} onPlace={onPlace} state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
+      <Board3D hideOwnHand={!spectating} places={places} onPlace={onPlace} state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
         onCard={onCard} onHover={setHover} onPile={(owner, loc) => setPile({ owner, loc })} />
 
-      <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} />
+      <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} counts={countsOf(you)} />
+      {!spectating && <HandBar cards={myHand} byCard={byCard} selected={selectedUids} onCard={onCard} onHover={setHover} />}
 
       <DuelLog log={view.log} you={you} names={view.players} />
       <ChainPanel chain={chainNow} you={you} />

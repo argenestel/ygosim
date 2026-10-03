@@ -27,7 +27,7 @@ interface Props {
 
 const edgeMat = new THREE.MeshStandardMaterial({ color: "#1a1208", roughness: 0.6 });
 const geo = new THREE.BoxGeometry(CW, CH, 0.012);
-const glowGeo = new THREE.PlaneGeometry(CW * 1.5, CH * 1.4);
+const glowGeo = new THREE.PlaneGeometry(CW * 1.22, CH * 1.16);
 const tmp = new THREE.Vector3();
 const tmpE = new THREE.Euler(0, 0, 0, "YXZ");
 
@@ -103,7 +103,7 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
     }
     if (glow.current) {
       const m = glow.current.material as THREE.MeshBasicMaterial;
-      m.opacity = selected ? 0.95 : selectable ? 0.45 + 0.35 * Math.sin(now * 5) : 0;
+      m.opacity = selected ? 0.9 : selectable ? 0.3 + 0.2 * Math.sin(now * 4) : 0;
       m.color.set(selected ? "#5dffb0" : "#ffcc55");
       glow.current.visible = selectable || selected;
     }

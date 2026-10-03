@@ -14,6 +14,8 @@ import { S, slotWorld, worldTargets } from "./space";
 export interface PlaceTarget { id: string; x: number; z: number; label: string; picked: boolean; }
 
 interface Props {
+  /** The viewer's hand is drawn as a 2D HandBar overlay instead. */
+  hideOwnHand?: boolean;
   places?: PlaceTarget[];
   onPlace?: (id: string) => void;
   state: DuelState;
@@ -26,8 +28,8 @@ interface Props {
   shake: number;
 }
 
-const BASE_CAM = new THREE.Vector3(0, 8.4, 7.2);
-const LOOK = new THREE.Vector3(0, 0, 0.75);
+const BASE_CAM = new THREE.Vector3(0, 8.9, 6.4);
+const LOOK = new THREE.Vector3(0, 0, 0.55);
 const LOW_GRAPHICS = import.meta.env.DEV && import.meta.env.VITE_E2E_LOW_GRAPHICS === "1";
 
 function CameraRig({ shake }: { shake: number }) {
@@ -37,7 +39,7 @@ function CameraRig({ shake }: { shake: number }) {
     if (shake !== kick.current.id) kick.current = { id: shake, t: 0.45 };
     kick.current.t = Math.max(0, kick.current.t - dt);
     // Pull back on narrow screens so the whole field stays visible.
-    const k = THREE.MathUtils.clamp(1.7 / (size.width / size.height), 1, 1.75);
+    const k = THREE.MathUtils.clamp(1.42 / (size.width / size.height), 0.92, 1.55);
     const a = kick.current.t * 0.5;
     camera.position.set(
       BASE_CAM.x + Math.sin(s.clock.elapsedTime * 0.25) * 0.15 + (Math.random() - 0.5) * a,
@@ -192,7 +194,7 @@ function PlaceTiles({ places, onPlace }: { places: PlaceTarget[]; onPlace: (id: 
   );
 }
 
-function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake, places, onPlace }: Props) {
+function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake, places, onPlace, hideOwnHand }: Props) {
   const targets = useMemo(() => worldTargets(state.cards, state.you), [state.cards, state.you]);
   const clock = useThree((s) => s.clock);
   useFrame(({ camera, gl }) => {
@@ -263,7 +265,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
         const t = targets.get(c.uid);
         if (!t) return null;
         return (
-          <Card3D key={c.uid} card={c} target={t} visible={!visible.has(c.uid)} mine={c.controller === state.you}
+          <Card3D key={c.uid} card={c} target={t} visible={!visible.has(c.uid) && !(hideOwnHand && c.location === "hand" && c.controller === state.you)} mine={c.controller === state.you}
             selectable={selectable.has(c.uid) && !isPile(c.location)} selected={selected.has(c.uid)} motion={motions.get(c.uid)}
             onClick={(card, at) => (isPile(card.location) ? onPile(card.controller, card.location) : onCard(card, at))} onHover={onHover} />
         );

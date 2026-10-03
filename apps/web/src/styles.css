@@ -267,7 +267,7 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .lp-pop { position: absolute; right: 14px; top: 10px; font-family: var(--head); font-size: 1.9rem; font-weight: 800; color: #ff6b62; text-shadow: 0 2px 0 #000, 0 0 16px rgba(229, 83, 75, 0.7); pointer-events: none; }
 .lp-pop.heal { color: #6fe3a9; text-shadow: 0 2px 0 #000, 0 0 16px rgba(69, 201, 138, 0.7); }
 
-.inspector { position: absolute; z-index: 15; left: 16px; top: 120px; width: 250px; max-height: calc(100% - 210px); overflow: auto; background: rgba(10, 14, 22, 0.92); border: 1px solid var(--line); border-radius: 12px; padding: 12px; backdrop-filter: blur(8px); transition: opacity 0.2s; }
+.inspector { position: absolute; z-index: 15; left: 16px; top: 186px; width: 250px; max-height: calc(100% - 420px); overflow: auto; background: rgba(10, 14, 22, 0.92); border: 1px solid var(--line); border-radius: 12px; padding: 12px; backdrop-filter: blur(8px); transition: opacity 0.2s; }
 .inspector.empty { opacity: 0; pointer-events: none; }
 .insp-art { width: 140px; margin: 0 auto 10px; aspect-ratio: 0.686; border-radius: 5px; overflow: hidden; box-shadow: 0 8px 20px rgba(0, 0, 0, 0.6); }
 .inspector h3 { font-size: 1rem; margin: 4px 0; }
@@ -418,3 +418,33 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 .top-tools .chain-mode.off { color: #ff9b95; border-color: rgba(229, 83, 75, 0.45); }
 .top-tools .chain-mode.auto { color: var(--gold-hi); border-color: rgba(214, 177, 94, 0.45); }
 .chain-targets { font-style: normal; font-size: 0.7rem; color: var(--gold-hi); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---------- Arena UX v2: hand bar, player plates, action dock ---------- */
+.hand-bar { position: absolute; z-index: 24; left: 50%; bottom: -26px; transform: translateX(-50%); height: 200px; pointer-events: none; }
+.hand-card { position: absolute; bottom: 0; width: var(--card-w, 132px); aspect-ratio: 0.686; padding: 0; border: none; border-radius: 6px; overflow: visible; background: transparent; pointer-events: auto; transform-origin: 50% 120%; cursor: pointer; }
+.hand-card img { width: 100%; height: 100%; object-fit: cover; display: block; border-radius: 6px; box-shadow: 0 14px 30px rgba(0, 0, 0, 0.65), 0 0 0 1px rgba(255, 255, 255, 0.08); }
+.hand-card:hover:not(:disabled) { background: transparent; border: none; }
+.hand-card.playable img { box-shadow: 0 14px 30px rgba(0, 0, 0, 0.65), 0 0 0 2px var(--gold), 0 0 22px rgba(214, 177, 94, 0.45); }
+.hand-card.picked img { box-shadow: 0 0 0 3px var(--cyan), 0 0 22px rgba(92, 200, 242, 0.6); }
+.hand-actions { position: absolute; top: -8px; right: -8px; min-width: 22px; height: 22px; padding: 0 6px; border-radius: 11px; background: var(--gold); color: #1b1405; font-size: 0.72rem; font-weight: 800; display: grid; place-items: center; box-shadow: 0 2px 8px rgba(0, 0, 0, 0.5); }
+
+.lp { min-width: 250px; padding: 10px 14px 10px 14px; }
+.lp.me { bottom: 16px; }
+.lp-head { display: flex; align-items: center; gap: 8px; }
+.lp-avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-family: var(--head); font-weight: 800; font-size: 0.8rem; background: var(--panel-3); color: var(--gold); flex: none; }
+.lp.active .lp-avatar { box-shadow: 0 0 0 2px var(--gold), 0 0 14px rgba(214, 177, 94, 0.6); }
+.lp-turn { margin-left: 8px; padding: 1px 7px; border-radius: 99px; font-size: 0.62rem; letter-spacing: 0.1em; background: var(--gold); color: #1b1405; }
+.lp-counts { display: flex; gap: 10px; margin-top: 7px; font-size: 0.74rem; color: var(--dim); font-variant-numeric: tabular-nums; }
+.lp-counts span { white-space: nowrap; }
+
+.action-dock { position: absolute; z-index: 26; right: 18px; bottom: 18px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+.dock-row { display: flex; gap: 8px; align-items: center; }
+.dock-main { font-family: var(--head); letter-spacing: 0.08em; padding: 12px 22px; font-size: 1rem; }
+.dock-more { position: relative; }
+.dock-more > button { font-size: 1.2rem; padding: 8px 14px; background: rgba(10, 14, 22, 0.85); border: 1px solid var(--line-2); }
+.dock-menu { position: absolute; bottom: calc(100% + 6px); right: 0; display: flex; flex-direction: column; gap: 4px; padding: 6px; min-width: 190px; background: var(--panel); border: 1px solid var(--line-2); border-radius: 10px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6); }
+.dock-menu button { text-align: left; font-size: 0.85rem; padding: 8px 12px; }
+.chat { bottom: 150px; }
+.log-toggle { top: 138px; }
+.duel-log { top: 178px; }
+@media (max-width: 760px) { .hand-bar { height: 150px; } .lp-counts { display: none; } .lp.me { bottom: auto; top: 150px; } }

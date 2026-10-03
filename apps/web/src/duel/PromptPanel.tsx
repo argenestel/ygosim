@@ -1,3 +1,4 @@
+import { useState } from "react";
 import type { Prompt, PromptOption } from "@ygosim/protocol";
 import { validateSelection } from "@ygosim/protocol";
 import { CardFace } from "./CardView";
@@ -41,16 +42,7 @@ export function PromptPanel({ prompt, selected, toggle, submit }: Props) {
     requirement = `Selected contribution: ${low === high ? low : `${low}–${high}`} · ${constraints.mode === "exact" ? "exactly" : "at least"} ${constraints.target} required${constraints.mandatory.length ? " (includes mandatory materials)" : ""}`;
   }
 
-  if (isBoardMenu(prompt)) {
-    // Card-bound options are picked on the board; only global ones go in the rail.
-    const global = prompt.options.filter((o) => !o.card);
-    return (
-      <div className="phase-actions">
-        <div className="hint-text">{prompt.text}</div>
-        {global.map((o) => <button key={o.id} className="phase-btn" onClick={() => submit([o.id])}>{o.label}</button>)}
-      </div>
-    );
-  }
+  if (isBoardMenu(prompt)) return <ActionDock prompt={prompt} submit={submit} />;
 
   const yesNo = prompt.kind === "select_yesno" || prompt.kind === "select_effect_yn";
   return (
@@ -91,6 +83,36 @@ export function CardMenu({ options, at, onPick, onClose }: { options: PromptOpti
           })}
           <button className="ghost" onClick={onClose}>Cancel</button>
         </div>
+      </div>
+    </div>
+  );
+}
+
+const PRIMARY = [/battle phase/i, /main phase 2/i, /end (phase|turn)/i];
+
+/** Bottom-right dock: one clear "next step" button, the rest tucked behind ⋯. */
+function ActionDock({ prompt, submit }: { prompt: Prompt; submit: (ids: string[]) => void }) {
+  const [more, setMore] = useState(false);
+  const global = prompt.options.filter((o) => !o.card);
+  const steps = PRIMARY.map((re) => global.find((o) => re.test(o.label))).filter((o): o is PromptOption => !!o);
+  const primary = steps[0];
+  const rest = global.filter((o) => o !== primary);
+  const playable = prompt.options.length - global.length;
+  return (
+    <div className="action-dock">
+      <div className="hint-text">{playable > 0 ? `${playable} action${playable > 1 ? "s" : ""} available — click a glowing card` : prompt.text}</div>
+      <div className="dock-row">
+        {rest.length > 0 && (
+          <div className="dock-more">
+            <button className="ghost" aria-label="More actions" onClick={() => setMore((m) => !m)}>⋯</button>
+            {more && (
+              <div className="dock-menu" onMouseLeave={() => setMore(false)}>
+                {rest.map((o) => <button key={o.id} onClick={() => { setMore(false); submit([o.id]); }}>{o.label}</button>)}
+              </div>
+            )}
+          </div>
+        )}
+        {primary && <button className="primary dock-main" onClick={() => submit([primary.id])}>{primary.label.replace(/^Go to /, "")} →</button>}
       </div>
     </div>
   );
