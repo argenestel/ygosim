@@ -57,7 +57,7 @@ function Pillar({ color, dur = 1, radius = 0.55, height = 5 }: { color: string; 
     if (!m.current) return;
     m.current.visible = p <= 1;
     const grow = ease(p * 3);
-    m.current.scale.set(grow * (1 - p * 0.5), grow, grow * (1 - p * 0.5));
+    m.current.scale.set(Math.max(0.001, grow * (1 - p * 0.5)), Math.max(0.001, grow), Math.max(0.001, grow * (1 - p * 0.5)));
     (m.current.material as THREE.MeshBasicMaterial).opacity = p < 0.3 ? 1 : 1 - (p - 0.3) / 0.7;
   });
   return (
@@ -248,7 +248,7 @@ export function ShatterFx({ at }: { at: THREE.Vector3 }) {
     seeds.forEach((s, i) => {
       m.position.set(s.o.x + s.v.x * t, 0.1 + s.v.y * t - 4.5 * t * t, s.o.z + s.v.z * t);
       m.rotation.set(s.r.x * t, s.r.y * t, s.r.z * t);
-      m.scale.setScalar(Math.max(0, 1 - t * 0.8));
+      m.scale.setScalar(Math.max(0.001, 1 - t * 0.8));
       m.updateMatrix();
       inst.current!.setMatrixAt(i, m.matrix);
     });

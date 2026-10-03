@@ -1,7 +1,6 @@
 import { SafeText } from "./SafeText";
 import {Billboard, Line} from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Suspense, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { CardRef, DuelState, PlayerIdx } from "@ygosim/protocol";
@@ -251,10 +250,6 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
         }
         return null;
       })}
-      {!LOW_GRAPHICS && <EffectComposer>
-        {/* Only bright gameplay FX cross this threshold; the arena itself never blooms. */}
-        <Bloom luminanceThreshold={0.92} luminanceSmoothing={0.1} intensity={0.6} mipmapBlur />
-      </EffectComposer>}
     </>
   );
 }

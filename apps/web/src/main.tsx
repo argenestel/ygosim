@@ -9,6 +9,12 @@ import { DeckList } from "./screens/DeckList";
 import { Home } from "./screens/Home";
 import "./styles.css";
 
+/** Dev-only probe: counts how often the app-level loading screen replaces the duel. */
+function ArenaFallback() {
+  if (import.meta.env.DEV) { const w = window as unknown as { __ygosimProbe?: Record<string, number> }; (w.__ygosimProbe ??= {}).appFallback = (w.__ygosimProbe.appFallback ?? 0) + 1; }
+  return <div className="duel-wait"><div className="spinner" /><h2>Entering the arena…</h2></div>;
+}
+
 // The 3D duel (three.js) is split out so the menus load instantly.
 const DuelScreen = lazy(() => import("./duel/DuelScreen").then((m) => ({ default: m.DuelScreen })));
 
@@ -24,7 +30,7 @@ function App() {
   if (screen.s === "edit") return <DeckEditor id={screen.id} onBack={() => setScreen({ s: "decks" })} />;
   if (screen.s === "duel") {
     return (
-      <Suspense fallback={<div className="duel-wait"><div className="spinner" /><h2>Entering the arena…</h2></div>}>
+      <Suspense fallback={<ArenaFallback />}>
         <DuelScreen key={screen.key} launch={screen.launch} deck={activeProfile()?.deck ?? { main: [], extra: [], side: [] }} name={name} onExit={() => setScreen({ s: "home" })} />
       </Suspense>
     );

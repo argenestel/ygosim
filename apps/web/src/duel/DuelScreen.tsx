@@ -92,6 +92,16 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
   const { view, send, respond, setSpeed, clearError } = useDuel(open);
+  // Dev-only probes for diagnosing full-screen blanking.
+  useEffect(() => {
+    if (!import.meta.env.DEV) return;
+    const w = window as unknown as { __ygosimProbe?: Record<string, number> };
+    const pr = (w.__ygosimProbe ??= {});
+    pr.duelMounts = (pr.duelMounts ?? 0) + 1;
+    const lost = () => { pr.contextLost = (pr.contextLost ?? 0) + 1; };
+    const t = setInterval(() => document.querySelectorAll("canvas").forEach((c) => { if (!(c as HTMLCanvasElement & { __probe?: boolean }).__probe) { (c as HTMLCanvasElement & { __probe?: boolean }).__probe = true; c.addEventListener("webglcontextlost", lost); } }), 1000);
+    return () => clearInterval(t);
+  }, []);
   const { state, prompt: rawPrompt, fx } = view;
 
   const [hover, setHover] = useState<CardRef | null>(null);
