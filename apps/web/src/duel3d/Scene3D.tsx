@@ -1,4 +1,5 @@
-import { Billboard, Line, Text } from "@react-three/drei";
+import { SafeText } from "./SafeText";
+import {Billboard, Line} from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
 import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Suspense, useMemo, useRef } from "react";
@@ -81,7 +82,7 @@ function PileHits({ state, onPile, glowing }: { state: DuelState; onPile: Props[
             {n > 0 && (
               <group position={[0, 0.03, (mine ? 1 : -1) * (CARD_H * S / 2 + 0.17)]} rotation={[-Math.PI / 2, 0, 0]}>
                 <mesh><planeGeometry args={[0.46, 0.24]} /><meshBasicMaterial color="#0a0d12" transparent opacity={0.88} /></mesh>
-                <Text position={[0, 0, 0.002]} fontSize={0.17} color="#e9edf4" anchorX="center" anchorY="middle">{String(n)}</Text>
+                <SafeText position={[0, 0, 0.002]} fontSize={0.17} color="#e9edf4" anchorX="center" anchorY="middle">{String(n)}</SafeText>
               </group>
             )}
           </group>
@@ -101,9 +102,9 @@ function StatPlates({ state, targets }: { state: DuelState; targets: Map<string,
           // Sits on the card's own lower text box (never over the artwork, never into the next row).
           <group key={c.uid} position={[t.x, 0.06, t.z + (c.controller === state.you ? 1 : -1) * (CARD_H * S / 2 - 0.17)]} rotation={[-Math.PI / 2, 0, 0]}>
             <mesh><planeGeometry args={[1.02, 0.24]} /><meshBasicMaterial color="#0a0d12" transparent opacity={0.9} /></mesh>
-            <Text position={[-0.04, 0, 0.002]} fontSize={0.16} anchorX="right" anchorY="middle" color={c.position === "atk" ? "#ffffff" : "#7d8799"}>{String(c.atk)}</Text>
-            <Text position={[0, 0, 0.002]} fontSize={0.13} anchorX="center" anchorY="middle" color="#5a6377">/</Text>
-            <Text position={[0.04, 0, 0.002]} fontSize={0.16} anchorX="left" anchorY="middle" color={c.position === "atk" ? "#7d8799" : "#ffffff"}>{c.def === undefined ? "—" : String(c.def)}</Text>
+            <SafeText position={[-0.04, 0, 0.002]} fontSize={0.16} anchorX="right" anchorY="middle" color={c.position === "atk" ? "#ffffff" : "#7d8799"}>{String(c.atk)}</SafeText>
+            <SafeText position={[0, 0, 0.002]} fontSize={0.13} anchorX="center" anchorY="middle" color="#5a6377">/</SafeText>
+            <SafeText position={[0.04, 0, 0.002]} fontSize={0.16} anchorX="left" anchorY="middle" color={c.position === "atk" ? "#7d8799" : "#ffffff"}>{c.def === undefined ? "—" : String(c.def)}</SafeText>
           </group>
         );
       })}
@@ -131,7 +132,7 @@ function ChainMarks({ state, targets }: { state: DuelState; targets: Map<string,
         <Billboard key={n} position={p}>
           <mesh><circleGeometry args={[0.24, 32]} /><meshBasicMaterial color="#1b1405" transparent opacity={0.92} /></mesh>
           <mesh position={[0, 0, 0.001]}><ringGeometry args={[0.22, 0.26, 32]} /><meshBasicMaterial color="#f2d792" toneMapped={false} /></mesh>
-          <Text position={[0, 0, 0.002]} fontSize={0.26} color="#f2d792" anchorX="center" anchorY="middle" fontWeight={700}>{String(n)}</Text>
+          <SafeText position={[0, 0, 0.002]} fontSize={0.26} color="#f2d792" anchorX="center" anchorY="middle" fontWeight={700}>{String(n)}</SafeText>
         </Billboard>
       ))}
     </group>
@@ -258,12 +259,18 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
   );
 }
 
+/** Dev-only: counts how often the whole scene suspends (i.e. the board blanks). */
+function BlankProbe() {
+  if (import.meta.env.DEV) { const w = window as unknown as { __ygosimSceneBlanks?: number }; w.__ygosimSceneBlanks = (w.__ygosimSceneBlanks ?? 0) + 1; }
+  return null;
+}
+
 export function Board3D(props: Props) {
   return (
     <div className="board3d">
       <Canvas shadows={!LOW_GRAPHICS} dpr={[1, 2]} camera={{ fov: 36, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
         onPointerMissed={() => props.onHover(null)}>
-        <Suspense fallback={null}><Scene {...props} /></Suspense>
+        <Suspense fallback={<BlankProbe />}><Scene {...props} /></Suspense>
       </Canvas>
     </div>
   );

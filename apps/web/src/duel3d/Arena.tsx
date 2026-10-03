@@ -1,4 +1,5 @@
-import { Text } from "@react-three/drei";
+import { SafeText } from "./SafeText";
+
 import { useMemo } from "react";
 import * as THREE from "three";
 import { CARD_H, CARD_W, zoneFrames } from "../duel/layout";
@@ -103,10 +104,10 @@ function Zone({ x, z, kind, label, side }: { x: number; z: number; kind: string;
         <lineBasicMaterial color={tint} transparent opacity={kind === "emz" ? 0.55 : 0.28} />
       </lineSegments>
       {label && (
-        <Text position={[0, 0.006, 0]} rotation={[-Math.PI / 2, 0, side === "op" ? Math.PI : 0]} fontSize={label.length > 2 ? 0.13 : 0.2} letterSpacing={0.12}
+        <SafeText position={[0, 0.006, 0]} rotation={[-Math.PI / 2, 0, side === "op" ? Math.PI : 0]} fontSize={label.length > 2 ? 0.13 : 0.2} letterSpacing={0.12}
           color={tint} fillOpacity={0.32} anchorX="center" anchorY="middle">
           {PILE_ICON[label] ?? label}
-        </Text>
+        </SafeText>
       )}
     </group>
   );

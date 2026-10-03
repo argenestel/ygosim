@@ -1,4 +1,5 @@
-import { Billboard, Text } from "@react-three/drei";
+import { SafeText } from "./SafeText";
+import {Billboard} from "@react-three/drei";
 import { useFrame, useThree } from "@react-three/fiber";
 import { useMemo, useRef } from "react";
 import * as THREE from "three";
@@ -151,7 +152,7 @@ function Title({ text, color, dur }: { text: string; color: string; dur: number 
   });
   return (
     <Billboard ref={ref} position={[0, 2.2, 0]}>
-      <Text fontSize={0.5} color={color} outlineWidth={0.02} outlineColor="#000" letterSpacing={0.12} anchorX="center" anchorY="middle">{text}</Text>
+      <SafeText fontSize={0.5} color={color} outlineWidth={0.02} outlineColor="#000" letterSpacing={0.12} anchorX="center" anchorY="middle">{text}</SafeText>
     </Billboard>
   );
 }
