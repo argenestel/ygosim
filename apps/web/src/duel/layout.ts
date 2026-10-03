@@ -3,11 +3,11 @@ import type { CardRef, PlayerIdx } from "@ygosim/protocol";
 // Board-plane coordinates (px). Origin = field center. The viewer is always at the bottom.
 export const CARD_W = 86;
 export const CARD_H = 125;
-export const COL = 108;
+export const COL = 122;
 export const BOARD_W = 1120;
 export const BOARD_H = 1000;
 
-const ROW = { emz: 0, mzone: 92, szone: 235, hand: 400 };
+const ROW = { emz: 0, mzone: 100, szone: 252, hand: 420 };
 const SIDE = 3.05 * COL;
 
 export interface Pos { x: number; y: number; z: number; rot: number; }

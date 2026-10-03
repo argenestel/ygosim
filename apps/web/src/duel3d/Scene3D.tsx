@@ -1,10 +1,11 @@
-import { Billboard, Line, Sparkles, Text } from "@react-three/drei";
+import { Billboard, Line, Text } from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
-import { Bloom, EffectComposer, Vignette } from "@react-three/postprocessing";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Suspense, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { CardRef, DuelState, PlayerIdx } from "@ygosim/protocol";
-import { CARD_H, CARD_W, isPile, zoneFrames } from "../duel/layout";
+import { CARD_H, CARD_W, isPile } from "../duel/layout";
+import { Arena, ArenaLights } from "./Arena";
 import type { Fx } from "../duel/useDuel";
 import { Card3D, type Motion } from "./Card3D";
 import { ActivateFx, AttackFx, ShatterFx, SummonFx } from "./Fx3D";
@@ -28,75 +29,29 @@ interface Props {
   shake: number;
 }
 
-const BASE_CAM = new THREE.Vector3(0, 8.9, 6.4);
-const LOOK = new THREE.Vector3(0, 0, 0.55);
+// Steep, Master Duel-like overhead view: the opponent at the far end, you at the near end.
+const BASE_CAM = new THREE.Vector3(0, 14.2, 6.3);
+const LOOK = new THREE.Vector3(0, 0, 0.45);
 const LOW_GRAPHICS = import.meta.env.DEV && import.meta.env.VITE_E2E_LOW_GRAPHICS === "1";
+const REDUCED_MOTION = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 
+/** Static camera. Only a short, small shake on big impacts (none with reduced motion). */
 function CameraRig({ shake }: { shake: number }) {
   const { camera, size } = useThree();
   const kick = useRef({ id: 0, t: 0 });
-  useFrame((s, dt) => {
-    if (shake !== kick.current.id) kick.current = { id: shake, t: 0.45 };
+  useFrame((_, dt) => {
+    if (shake !== kick.current.id) kick.current = { id: shake, t: REDUCED_MOTION ? 0 : 0.22 };
     kick.current.t = Math.max(0, kick.current.t - dt);
-    // Pull back on narrow screens so the whole field stays visible.
-    const k = THREE.MathUtils.clamp(1.42 / (size.width / size.height), 0.92, 1.55);
-    const a = kick.current.t * 0.5;
-    camera.position.set(
-      BASE_CAM.x + Math.sin(s.clock.elapsedTime * 0.25) * 0.15 + (Math.random() - 0.5) * a,
-      BASE_CAM.y * k + (Math.random() - 0.5) * a,
-      BASE_CAM.z * k + (Math.random() - 0.5) * a,
-    );
+    // Back off on narrow/tall screens so the whole arena stays in frame.
+    const k = THREE.MathUtils.clamp(1.62 / (size.width / size.height), 1, 1.8);
+    const a = kick.current.t * 0.18;
+    camera.position.set(BASE_CAM.x + (Math.random() - 0.5) * a, BASE_CAM.y * k, BASE_CAM.z * k + (Math.random() - 0.5) * a);
     camera.lookAt(LOOK);
   });
   return null;
 }
 
-const tableMat = new THREE.ShaderMaterial({
-  uniforms: { uTime: { value: 0 } },
-  vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position,1.0); }`,
-  fragmentShader: `
-    uniform float uTime; varying vec2 vUv;
-    float grid(vec2 p, float s){ vec2 g = abs(fract(p*s-0.5)-0.5)/fwidth(p*s); return 1.0-min(min(g.x,g.y),1.0); }
-    void main(){
-      vec2 p = vUv - 0.5;
-      vec3 me = vec3(0.010,0.014,0.024), op = vec3(0.014,0.012,0.020);
-      vec3 col = mix(me, op, smoothstep(-0.05,0.05,p.y));
-      col += grid(vUv, 28.0) * 0.008 * vec3(0.5,0.7,1.0);
-      float center = exp(-abs(p.y)*90.0);
-      col += center * vec3(0.84,0.69,0.37) * (0.10 + 0.03*sin(uTime*2.0));
-      float r = length(p*vec2(1.0,1.1));
-      col += 0.035*exp(-r*r*14.0)*vec3(0.55,0.6,0.75);
-      col *= smoothstep(0.75, 0.3, r);
-      gl_FragColor = vec4(col, 1.0);
-    }`,
-  extensions: { derivatives: true } as never,
-});
-
-function Table() {
-  useFrame((s) => { tableMat.uniforms.uTime.value = s.clock.elapsedTime; });
-  const frames = useMemo(() => zoneFrames(), []);
-  const w = CARD_W * S * 1.06, h = CARD_H * S * 1.04;
-  const rect = (x: number, z: number): [number, number, number][] => [
-    [x - w / 2, 0.006, z - h / 2], [x + w / 2, 0.006, z - h / 2], [x + w / 2, 0.006, z + h / 2], [x - w / 2, 0.006, z + h / 2], [x - w / 2, 0.006, z - h / 2],
-  ];
-  // One neutral line colour; gold only marks the shared Extra Monster Zones.
-  const color: Record<string, string> = { monster: "#8a97b0", spell: "#8a97b0", field: "#8a97b0", pile: "#5f6a80", emz: "#d6b15e" };
-  return (
-    <group>
-      <mesh rotation={[-Math.PI / 2, 0, 0]} receiveShadow material={tableMat}>
-        <planeGeometry args={[14, 12]} />
-      </mesh>
-      {frames.map((f) => (
-        <group key={f.key}>
-          <Line points={rect(f.x * S, f.y * S)} color={color[f.kind]} lineWidth={1.2} transparent opacity={0.45} toneMapped={false} />
-          {f.label && (
-            <Text position={[f.x * S, 0.01, f.y * S]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.12} color={color[f.kind]} fillOpacity={0.5} letterSpacing={0.2}>{f.label}</Text>
-          )}
-        </group>
-      ))}
-    </group>
-  );
-}
+const pileEdge = new THREE.EdgesGeometry(new THREE.PlaneGeometry(CARD_W * S * 1.12, CARD_H * S * 1.1));
 
 function PileHits({ state, onPile, glowing }: { state: DuelState; onPile: Props["onPile"]; glowing: Set<string> }) {
   const counts = useMemo(() => {
@@ -118,9 +73,16 @@ function PileHits({ state, onPile, glowing }: { state: DuelState; onPile: Props[
               <boxGeometry args={[CARD_W * S, 1, CARD_H * S]} />
               <meshBasicMaterial transparent opacity={0} depthWrite={false} />
             </mesh>
-            {glowing.has(k) && <Sparkles count={20} scale={[1, 0.8, 1.3]} position={[0, 0.4, 0]} color="#ffcc55" size={4} speed={0.6} />}
+            {glowing.has(k) && (
+              <lineSegments rotation={[-Math.PI / 2, 0, 0]} position={[0, 0.03, 0]} geometry={pileEdge}>
+                <lineBasicMaterial color="#f2d792" toneMapped={false} />
+              </lineSegments>
+            )}
             {n > 0 && (
-              <Text position={[0, 0.02, (mine ? 1 : -1) * (CARD_H * S / 2 + 0.16)]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.17} color="#fff" outlineWidth={0.012} outlineColor="#000">{String(n)}</Text>
+              <group position={[0, 0.03, (mine ? 1 : -1) * (CARD_H * S / 2 + 0.17)]} rotation={[-Math.PI / 2, 0, 0]}>
+                <mesh><planeGeometry args={[0.46, 0.24]} /><meshBasicMaterial color="#0a0d12" transparent opacity={0.88} /></mesh>
+                <Text position={[0, 0, 0.002]} fontSize={0.17} color="#e9edf4" anchorX="center" anchorY="middle">{String(n)}</Text>
+              </group>
             )}
           </group>
         );
@@ -136,11 +98,12 @@ function StatPlates({ state, targets }: { state: DuelState; targets: Map<string,
         const t = targets.get(c.uid);
         if (!t) return null;
         return (
-          <group key={c.uid} position={[t.x, 0.04, t.z + CARD_H * S / 2 + 0.13]}>
-            <mesh rotation={[-Math.PI / 2, 0, 0]}><planeGeometry args={[0.98, 0.22]} /><meshBasicMaterial color="#000" transparent opacity={0.72} /></mesh>
-            <Text position={[0, 0.01, 0]} rotation={[-Math.PI / 2, 0, 0]} fontSize={0.15} color={c.position === "atk" ? "#ffffff" : "#9fb0d0"} outlineWidth={0.008} outlineColor="#000">
-              {`${c.atk} / ${c.def ?? "—"}`}
-            </Text>
+          // Sits on the card's own lower text box (never over the artwork, never into the next row).
+          <group key={c.uid} position={[t.x, 0.06, t.z + (c.controller === state.you ? 1 : -1) * (CARD_H * S / 2 - 0.17)]} rotation={[-Math.PI / 2, 0, 0]}>
+            <mesh><planeGeometry args={[1.02, 0.24]} /><meshBasicMaterial color="#0a0d12" transparent opacity={0.9} /></mesh>
+            <Text position={[-0.04, 0, 0.002]} fontSize={0.16} anchorX="right" anchorY="middle" color={c.position === "atk" ? "#ffffff" : "#7d8799"}>{String(c.atk)}</Text>
+            <Text position={[0, 0, 0.002]} fontSize={0.13} anchorX="center" anchorY="middle" color="#5a6377">/</Text>
+            <Text position={[0.04, 0, 0.002]} fontSize={0.16} anchorX="left" anchorY="middle" color={c.position === "atk" ? "#7d8799" : "#ffffff"}>{c.def === undefined ? "—" : String(c.def)}</Text>
           </group>
         );
       })}
@@ -152,21 +115,23 @@ function StatPlates({ state, targets }: { state: DuelState; targets: Map<string,
 function ChainMarks({ state, targets }: { state: DuelState; targets: Map<string, { x: number; z: number }> }) {
   const line = useRef<{ material: { dashOffset: number } } | null>(null);
   useFrame((_, dt) => { if (line.current) line.current.material.dashOffset -= dt * 0.8; });
-  const pts = state.chain.map((l) => {
+  // Cards activated from the hand are shown in the chain panel; only on-board links get 3D marks.
+  const marks = state.chain.map((l, i) => ({ l, n: i + 1 })).filter(({ l }) => l.card.location !== "hand").map(({ l, n }) => {
     const t = targets.get(l.card.uid) ?? (() => { const s = slotWorld(l.card.location, l.card.sequence, l.card.controller === state.you); return { x: s.x, z: s.z }; })();
-    return new THREE.Vector3(t.x, 1.25, t.z);
+    return { n, p: new THREE.Vector3(t.x, 1.25, t.z) };
   });
+  const pts = marks.map((m) => m.p);
   if (!pts.length) return null;
   return (
     <group>
       {pts.length > 1 && (
         <Line ref={line as never} points={pts} color="#d6b15e" lineWidth={2.5} dashed dashSize={0.25} gapSize={0.12} transparent opacity={0.9} toneMapped={false} />
       )}
-      {pts.map((p, i) => (
-        <Billboard key={i} position={p}>
+      {marks.map(({ p, n }) => (
+        <Billboard key={n} position={p}>
           <mesh><circleGeometry args={[0.24, 32]} /><meshBasicMaterial color="#1b1405" transparent opacity={0.92} /></mesh>
           <mesh position={[0, 0, 0.001]}><ringGeometry args={[0.22, 0.26, 32]} /><meshBasicMaterial color="#f2d792" toneMapped={false} /></mesh>
-          <Text position={[0, 0, 0.002]} fontSize={0.26} color="#f2d792" anchorX="center" anchorY="middle" fontWeight={700}>{String(i + 1)}</Text>
+          <Text position={[0, 0, 0.002]} fontSize={0.26} color="#f2d792" anchorX="center" anchorY="middle" fontWeight={700}>{String(n)}</Text>
         </Billboard>
       ))}
     </group>
@@ -228,6 +193,9 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
     return s;
   }, [state.cards, selectable]);
 
+  // Cards targeted by the current chain get a red outline.
+  const targeted = useMemo(() => new Set(state.chain.flatMap((l) => (l.targets ?? []).map((t) => t.uid))), [state.chain]);
+
   const vec = (uid?: string) => { const t = uid ? targets.get(uid) : undefined; return t ? new THREE.Vector3(t.x, 0.05, t.z) : undefined; };
 
   // Per-card motion overrides driven by the current FX queue.
@@ -250,13 +218,10 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
   return (
     <>
       <CameraRig shake={shake} />
-      <color attach="background" args={["#04060d"]} />
-      <fog attach="fog" args={["#04060d", 14, 26]} />
-      <ambientLight intensity={0.55} />
-      <directionalLight position={[3, 10, 6]} intensity={1.6} castShadow={!LOW_GRAPHICS} shadow-mapSize={[1024, 1024]} />
-      <pointLight position={[0, 3, 0]} intensity={5} color="#e8d2a0" distance={8} />
-      <Table />
-      <Sparkles count={40} scale={[14, 4, 12]} position={[0, 2, 0]} size={1.8} speed={0.2} color="#d6c39a" opacity={0.35} />
+      <color attach="background" args={["#07090d"]} />
+      <fog attach="fog" args={["#07090d", 16, 30]} />
+      <ArenaLights shadows={!LOW_GRAPHICS} />
+      <Arena />
       <PileHits state={state} onPile={onPile} glowing={glowing} />
       <StatPlates state={state} targets={targets} />
       <ChainMarks state={state} targets={targets} />
@@ -266,7 +231,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
         if (!t) return null;
         return (
           <Card3D key={c.uid} card={c} target={t} visible={!visible.has(c.uid) && !(hideOwnHand && c.location === "hand" && c.controller === state.you)} mine={c.controller === state.you}
-            selectable={selectable.has(c.uid) && !isPile(c.location)} selected={selected.has(c.uid)} motion={motions.get(c.uid)}
+            selectable={selectable.has(c.uid) && !isPile(c.location)} selected={selected.has(c.uid)} targeted={targeted.has(c.uid)} motion={motions.get(c.uid)}
             onClick={(card, at) => (isPile(card.location) ? onPile(card.controller, card.location) : onCard(card, at))} onHover={onHover} />
         );
       })}
@@ -286,8 +251,8 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
         return null;
       })}
       {!LOW_GRAPHICS && <EffectComposer>
-        <Bloom luminanceThreshold={0.7} luminanceSmoothing={0.2} intensity={1.15} mipmapBlur />
-        <Vignette offset={0.25} darkness={0.75} />
+        {/* Only bright gameplay FX cross this threshold; the arena itself never blooms. */}
+        <Bloom luminanceThreshold={0.92} luminanceSmoothing={0.1} intensity={0.6} mipmapBlur />
       </EffectComposer>}
     </>
   );
@@ -296,7 +261,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
 export function Board3D(props: Props) {
   return (
     <div className="board3d">
-      <Canvas shadows={!LOW_GRAPHICS} dpr={[1, 2]} camera={{ fov: 42, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
+      <Canvas shadows={!LOW_GRAPHICS} dpr={[1, 2]} camera={{ fov: 36, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
         onPointerMissed={() => props.onHover(null)}>
         <Suspense fallback={null}><Scene {...props} /></Suspense>
       </Canvas>

@@ -16,9 +16,13 @@ export function useCardData(code?: number): CardData | undefined {
 
 export function Inspector({ code }: { code?: number }) {
   const d = useCardData(code);
+  const [open, setOpen] = useState(() => { try { return localStorage.getItem("ygosim.inspector") !== "0"; } catch { return true; } });
+  const toggle = () => { const v = !open; setOpen(v); try { localStorage.setItem("ygosim.inspector", v ? "1" : "0"); } catch {} };
+  if (!open) return <button className="insp-toggle" onClick={toggle} title="Show card details">Card details ▸</button>;
   if (code === undefined) return <aside className="inspector empty"><p>Hover a card to read it.</p></aside>;
   return (
     <aside className="inspector">
+      <button className="insp-collapse ghost" onClick={toggle} aria-label="Hide card details">✕</button>
       <div className="insp-art"><CardFace code={code} /></div>
       <h3>{d?.name ?? "…"}</h3>
       {d && (
@@ -26,7 +30,7 @@ export function Inspector({ code }: { code?: number }) {
           {d.type.join(" / ")}
           {d.attribute && <> · {d.attribute}</>}
           {d.race && <> · {d.race}</>}
-          {d.level !== undefined && <> · {d.type.includes("Xyz") ? "Rank" : "Lv"} {d.level}</>}
+          {d.level !== undefined && !d.linkMarkers && <> · {d.type.includes("Xyz") ? "Rank" : "Lv"} {d.level}</>}
           {d.scale !== undefined && <> · Scale {d.scale}</>}
           {d.linkMarkers && <> · LINK-{d.linkMarkers.length}</>}
         </div>

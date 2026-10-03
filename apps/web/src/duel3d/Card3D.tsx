@@ -3,7 +3,7 @@ import { easing } from "maath";
 import { memo, useEffect, useMemo, useRef, useState } from "react";
 import * as THREE from "three";
 import type { CardRef } from "@ygosim/protocol";
-import { backTexture, glowTexture, loadFront, placeholderTexture, readyFront } from "./textures";
+import { backTexture, loadFront, placeholderTexture, readyFront } from "./textures";
 import { CW, CH, HAND_TILT, type Target } from "./space";
 
 export interface Motion {
@@ -20,6 +20,8 @@ interface Props {
   mine: boolean;
   selectable: boolean;
   selected: boolean;
+  /** Targeted by a card in the current chain. */
+  targeted?: boolean;
   motion?: Motion;
   onClick: (c: CardRef, at: { x: number; y: number }) => void;
   onHover: (c: CardRef | null) => void;
@@ -27,13 +29,14 @@ interface Props {
 
 const edgeMat = new THREE.MeshStandardMaterial({ color: "#1a1208", roughness: 0.6 });
 const geo = new THREE.BoxGeometry(CW, CH, 0.012);
-const glowGeo = new THREE.PlaneGeometry(CW * 1.22, CH * 1.16);
+// State outline: a crisp rule just outside the card edge (no additive glow, no pulsing).
+const outlineGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(CW * 1.1, CH * 1.08));
+const OUTLINE = { playable: "#f2d792", selected: "#5cc8f2", targeted: "#ff5a52" };
 const tmp = new THREE.Vector3();
 const tmpE = new THREE.Euler(0, 0, 0, "YXZ");
 
-export const Card3D = memo(function Card3D({ card, target, visible, mine, selectable, selected, motion, onClick, onHover }: Props) {
+export const Card3D = memo(function Card3D({ card, target, visible, mine, selectable, selected, targeted, motion, onClick, onHover }: Props) {
   const group = useRef<THREE.Group>(null);
-  const glow = useRef<THREE.Mesh>(null);
   const [hover, setHover] = useState(false);
   const placed = useRef(false);
 
@@ -68,6 +71,9 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
     let pitch = faceDown && !inHand ? Math.PI / 2 : -Math.PI / 2;
     let yaw = target.yaw + (sideways ? Math.PI / 2 : 0);
     let roll = target.roll;
+    // Playable/selected cards rise slightly off the slab so they read as "live".
+    if (!inHand && (selectable || selected)) tmp.y += selected ? 0.09 : 0.05;
+    if (hover && !inHand && selectable) tmp.y += 0.05;
     if (inHand && mine) {
       pitch = -Math.PI / 2 + HAND_TILT;
       if (hover) { tmp.y += 0.45; tmp.z -= 0.25; }
@@ -89,6 +95,9 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
         yaw = target.yaw;
       }
     }
+    // Defense-position cards turn sideways; draw them slightly smaller so they stay inside their zone.
+    const scale = sideways ? 0.9 : 1;
+    g.scale.setScalar(scale);
     if (!placed.current) {
       g.position.copy(tmp);
       g.rotation.set(pitch, yaw, roll, "YXZ");
@@ -101,12 +110,6 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
       tmpE.set(pitch, yaw, roll, "YXZ");
       easing.dampE(g.rotation, tmpE, 0.14, dt);
     }
-    if (glow.current) {
-      const m = glow.current.material as THREE.MeshBasicMaterial;
-      m.opacity = selected ? 0.9 : selectable ? 0.3 + 0.2 * Math.sin(now * 4) : 0;
-      m.color.set(selected ? "#5dffb0" : "#ffcc55");
-      glow.current.visible = selectable || selected;
-    }
   });
 
   const over = (e: ThreeEvent<PointerEvent>) => { e.stopPropagation(); setHover(true); onHover(card); document.body.style.cursor = selectable ? "pointer" : "default"; };
@@ -114,9 +117,11 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
 
   return (
     <group ref={group} visible={visible}>
-      <mesh ref={glow} geometry={glowGeo} position={[0, 0, -0.01]} renderOrder={-1}>
-        <meshBasicMaterial map={glowTexture()} transparent depthWrite={false} blending={THREE.AdditiveBlending} toneMapped={false} />
-      </mesh>
+      {(selectable || selected || targeted) && (
+        <lineSegments geometry={outlineGeo}>
+          <lineBasicMaterial color={targeted ? OUTLINE.targeted : selected ? OUTLINE.selected : OUTLINE.playable} toneMapped={false} />
+        </lineSegments>
+      )}
       <mesh geometry={geo} material={mats} castShadow receiveShadow
         onClick={(e) => { e.stopPropagation(); onClick(card, { x: e.nativeEvent.clientX, y: e.nativeEvent.clientY }); }} onPointerOver={over} onPointerOut={out} />
       {card.overlays && card.overlays.length > 0 && card.overlays.map((o, i) => (

@@ -5,6 +5,7 @@ import { validateSelection } from "@ygosim/protocol";
 import { isMock } from "../api";
 import { isMuted, setMuted, uiClick } from "../sfx";
 import { createMockConn } from "../mock";
+import { createFixtureConn, isFixture } from "../dev/fixture";
 import { connect, type Conn } from "../net";
 import { Board3D, type PlaceTarget } from "../duel3d/Scene3D";
 import { slotWorld } from "../duel3d/space";
@@ -76,7 +77,7 @@ function LpBar({ name, lp, mine, active, hits, counts }: { name: string; lp: num
 
 export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch; deck: Deck; name: string; onExit: () => void }) {
   const open = useCallback((onMsg: (m: ServerMsg) => void, onClose: (why: string) => void): Conn => {
-    const c = isMock ? createMockConn(onMsg) : connect(onMsg, onClose);
+    const c = isFixture ? createFixtureConn(onMsg) : isMock ? createMockConn(onMsg) : connect(onMsg, onClose);
     c.send({ type: "hello", name, kind: "human" });
     const rules = { format: launch.format, match: launch.match };
     switch (launch.mode) {
@@ -235,7 +236,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         <LpBar name={view.players[opp] ?? "Opponent"} lp={state.lp[opp]} mine={false} active={state.turnPlayer === opp} hits={hits(opp)} counts={countsOf(opp)} />
         <div className="phase-bar">
           {view.match === "match" && view.score && <span className="score">G{(view.game ?? 0) + 1} · {view.score[you]}–{view.score[opp]}</span>}
-          <span className="turn-no">T{state.turn}</span>
+          <span className={`turn-no ${state.turnPlayer === you ? "me" : "op"}`}>T{state.turn}<small>{state.turnPlayer === you ? "You" : "Opp"}</small></span>
           {PHASES.map(([k, l]) => {
             const opt = phaseOption(k);
             return opt
@@ -283,8 +284,12 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       {prompt && !view.result && !spectating && (
         <PromptPanel prompt={prompt} selected={selected} toggle={toggle} submit={submit} />
       )}
-      {!prompt && !view.result && view.busy && <div className="opp-thinking">…</div>}
-      {!prompt && !view.result && !view.busy && <div className="opp-thinking">Opponent is thinking…</div>}
+      {!prompt && !view.result && !spectating && (
+        <div className="action-dock waiting" aria-live="polite">
+          <div className="hint-text">{view.busy ? "Resolving…" : state.turnPlayer === you ? "Waiting for a response…" : "Opponent's turn"}</div>
+          <button className="dock-main" disabled><span className="dock-spin" />{view.busy ? "Resolving" : "Waiting for opponent"}</button>
+        </div>
+      )}
 
       {menu && <CardMenu options={menu.opts} at={menu.at} onPick={(id) => submit([id])} onClose={() => setMenu(null)} />}
 

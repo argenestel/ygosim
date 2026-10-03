@@ -41,23 +41,28 @@ function makeCanvasTexture(w: number, h: number, draw: (g: CanvasRenderingContex
 let back: THREE.Texture | undefined;
 /** Original card-back design (not Konami's): swirling vortex on a dark frame. */
 export function backTexture() {
+  // Original card back: deep navy with an engraved gold ring emblem. Deliberately
+  // low-luminance so card backs never bloom or out-shine face-up cards.
   return (back ??= makeCanvasTexture(256, 372, (g, w, h) => {
-    const bg = g.createRadialGradient(w / 2, h / 2, 10, w / 2, h / 2, h * 0.7);
-    bg.addColorStop(0, "#4b2a8a"); bg.addColorStop(1, "#0d0620");
+    const bg = g.createLinearGradient(0, 0, 0, h);
+    bg.addColorStop(0, "#1b2236"); bg.addColorStop(1, "#0e1322");
     g.fillStyle = bg; g.fillRect(0, 0, w, h);
-    g.strokeStyle = "#b48a3a"; g.lineWidth = 10; g.strokeRect(5, 5, w - 10, h - 10);
-    g.strokeStyle = "#5a3d12"; g.lineWidth = 3; g.strokeRect(16, 16, w - 32, h - 32);
+    // Fine diagonal weave.
+    g.strokeStyle = "rgba(160,180,220,0.05)"; g.lineWidth = 1;
+    for (let i = -h; i < w; i += 9) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i + h, h); g.stroke(); }
+    // Frame.
+    g.strokeStyle = "#8a6d2c"; g.lineWidth = 8; g.strokeRect(4, 4, w - 8, h - 8);
+    g.strokeStyle = "rgba(214,177,94,0.35)"; g.lineWidth = 2; g.strokeRect(16, 16, w - 32, h - 32);
+    // Emblem: concentric rings and a four-point star.
     g.save(); g.translate(w / 2, h / 2);
-    for (let i = 0; i < 48; i++) {
-      g.rotate((Math.PI * 2) / 48);
-      const grad = g.createLinearGradient(0, 0, 90, 0);
-      grad.addColorStop(0, "rgba(255,210,120,0.9)"); grad.addColorStop(1, "rgba(80,140,255,0)");
-      g.strokeStyle = grad; g.lineWidth = 2;
-      g.beginPath(); g.moveTo(18, 0); g.quadraticCurveTo(50, 22, 92, 6); g.stroke();
-    }
-    const core = g.createRadialGradient(0, 0, 0, 0, 0, 30);
-    core.addColorStop(0, "#fff6d0"); core.addColorStop(0.5, "#ffb347"); core.addColorStop(1, "rgba(255,120,0,0)");
-    g.fillStyle = core; g.beginPath(); g.arc(0, 0, 30, 0, Math.PI * 2); g.fill();
+    g.strokeStyle = "rgba(214,177,94,0.75)"; g.lineWidth = 3;
+    g.beginPath(); g.arc(0, 0, 54, 0, Math.PI * 2); g.stroke();
+    g.strokeStyle = "rgba(214,177,94,0.4)"; g.lineWidth = 2;
+    g.beginPath(); g.arc(0, 0, 70, 0, Math.PI * 2); g.stroke();
+    g.fillStyle = "#b8944a";
+    g.beginPath();
+    for (let i = 0; i < 8; i++) { const r = i % 2 ? 12 : 40; const a = (i / 8) * Math.PI * 2 - Math.PI / 2; g.lineTo(Math.cos(a) * r, Math.sin(a) * r); }
+    g.closePath(); g.fill();
     g.restore();
   }));
 }
