@@ -1,9 +1,8 @@
 import { mkdir, writeFile, readFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { tmpdir } from "node:os";
 
-const IMG_DIR = process.env.VERCEL === "1" ? join(tmpdir(), "ygosim-img") : join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "img");
+const IMG_DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "..", "data", "img");
 const YGOPRODECK_CDN = "https://images.ygoprodeck.com/images";
 const pending = new Map<string, Promise<Buffer | null>>();
 let activeDownloads = 0;

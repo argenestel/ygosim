@@ -7,9 +7,9 @@ export const isMock = import.meta.env.DEV && new URLSearchParams(location.search
 export function wsUrl(): string {
   const env = (import.meta as any).env?.VITE_WS_URL as string | undefined;
   if (env) return env;
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  // In dev, Vite proxies /ws to :7777. In a static deploy, assume same host.
-  return `${proto}//${location.host}/ws`;
+  const url = new URL("/ws", import.meta.env.DEV ? location.origin : "https://ygoserver.onrender.com");
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.href;
 }
 
 export function imageFor(code: number) {
