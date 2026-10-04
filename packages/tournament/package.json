@@ -1,0 +1,33 @@
+{
+  "name": "@ygosim/tournament",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "LLM-agent tournament runner for ygosim",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.17.0",
+    "@ygosim/mcp": "workspace:*",
+    "@ygosim/protocol": "workspace:*",
+    "ws": "^8.18.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0",
+    "@types/ws": "^8.5.12"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "exports": {
+    "./standings": "./src/standings.ts",
+    "./storage": "./src/storage.ts",
+    "./types": "./src/types.ts"
+  }
+}

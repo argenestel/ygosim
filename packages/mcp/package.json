@@ -3,6 +3,11 @@
   "version": "0.1.0",
   "type": "module",
   "description": "MCP server + JSON-lines CLI letting coding agents duel on ygosim",
+  "exports": {
+    "./tools": "./src/tools.ts",
+    "./deck": "./src/deck.ts",
+    "./client": "./src/client.ts"
+  },
   "bin": {
     "ygosim-mcp": "dist/index.js",
     "ygosim-agent": "dist/cli.js"

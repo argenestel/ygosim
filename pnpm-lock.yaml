@@ -133,6 +133,9 @@ importers:
       '@ygosim/protocol':
         specifier: workspace:*
         version: link:../protocol
+      '@ygosim/tournament':
+        specifier: workspace:*
+        version: link:../tournament
       hono:
         specifier: ^4.6.14
         version: 4.13.12
@@ -154,6 +157,40 @@ importers:
         version: 5.9.3
       vitest:
         specifier: ^2.1.8
+        version: 2.1.9(@types/node@22.20.4)(lightningcss@1.33.0)
+
+  packages/tournament:
+    dependencies:
+      '@modelcontextprotocol/sdk':
+        specifier: ^1.17.0
+        version: 1.31.0(zod@3.25.76)
+      '@ygosim/mcp':
+        specifier: workspace:*
+        version: link:../mcp
+      '@ygosim/protocol':
+        specifier: workspace:*
+        version: link:../protocol
+      ws:
+        specifier: ^8.18.0
+        version: 8.22.0
+      zod:
+        specifier: ^3.25.0
+        version: 3.25.76
+    devDependencies:
+      '@types/node':
+        specifier: ^22.0.0
+        version: 22.20.4
+      '@types/ws':
+        specifier: ^8.5.12
+        version: 8.18.2
+      tsx:
+        specifier: ^4.19.0
+        version: 4.23.15
+      typescript:
+        specifier: ^5.6.0
+        version: 5.9.3
+      vitest:
+        specifier: ^2.1.0
         version: 2.1.9(@types/node@22.20.4)(lightningcss@1.33.0)
 
 packages:

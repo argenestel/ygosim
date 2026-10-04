@@ -12,6 +12,8 @@ import { loadEngine, parseYdkLocal, defaultFormats, type EngineApi } from "./eng
 import { abortImageDownloads, ensureImgDir, getImageBuffer } from "./image-cache.js";
 import { getAgentInfo, launchAgent, stopAgent, stopRoomAgents } from "./agents.js";
 import type { CreateDuel, RoomOptions } from "./room.js";
+import { addTournamentRoutes } from "./tournament-api.js";
+import { tournamentDir } from "@ygosim/tournament/storage";
 
 export interface ServerOptions extends RoomOptions {
   port?: number;
@@ -23,6 +25,7 @@ export interface ServerOptions extends RoomOptions {
   maxPayloadBytes?: number;
   messagesPerSecond?: number;
   messageBurst?: number;
+  tournamentDir?: string;
 }
 
 export function buildApi(
@@ -32,6 +35,7 @@ export function buildApi(
   getDbReady: () => Promise<CardDb | null>,
   parse = parseYdkLocal,
   getPort = () => Number(process.env.PORT ?? 7777),
+  tournamentsRoot = tournamentDir(),
 ) {
   const app = new Hono();
   app.use("/api/*", bodyLimit({ maxSize: 64 * 1024 }));
@@ -270,6 +274,9 @@ export function buildApi(
     }
   });
 
+  // Add tournament routes
+  addTournamentRoutes(app, tournamentsRoot);
+
   return app;
 }
 
@@ -311,7 +318,7 @@ export async function startServer(opts: ServerOptions = {}) {
   }, undefined, getEngine, getDbReady, opts.maxRooms ?? 100);
 
   let actualPort = port;
-  const app = buildApi(lobby, getDb, getEngine, getDbReady, parse, () => actualPort);
+  const app = buildApi(lobby, getDb, getEngine, getDbReady, parse, () => actualPort, opts.tournamentDir ?? tournamentDir());
 
   // Ensure image cache directory exists
   await ensureImgDir().catch((e) => console.warn("[server] failed to create image cache dir:", e));
