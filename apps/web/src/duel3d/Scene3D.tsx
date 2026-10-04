@@ -1,6 +1,7 @@
 import { SafeText } from "./SafeText";
 import {Billboard, Line} from "@react-three/drei";
 import { Canvas, useFrame, useThree } from "@react-three/fiber";
+import { Bloom, EffectComposer } from "@react-three/postprocessing";
 import { Suspense, useMemo, useRef } from "react";
 import * as THREE from "three";
 import type { CardRef, DuelState, PlayerIdx } from "@ygosim/protocol";
@@ -15,6 +16,8 @@ import { S, slotWorld, worldTargets } from "./space";
 export interface PlaceTarget { id: string; x: number; z: number; label: string; picked: boolean; }
 
 interface Props {
+  /** Low graphics: 1x pixel density, no shadows. */
+  low?: boolean;
   /** The viewer's hand is drawn as a 2D HandBar overlay instead. */
   hideOwnHand?: boolean;
   places?: PlaceTarget[];
@@ -159,7 +162,7 @@ function PlaceTiles({ places, onPlace }: { places: PlaceTarget[]; onPlace: (id: 
   );
 }
 
-function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake, places, onPlace, hideOwnHand }: Props) {
+function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, places, onPlace, hideOwnHand }: Props) {
   const targets = useMemo(() => worldTargets(state.cards, state.you), [state.cards, state.you]);
   const clock = useThree((s) => s.clock);
   useFrame(({ camera, gl }) => {
@@ -217,11 +220,6 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
 
   return (
     <>
-      <CameraRig shake={shake} />
-      <color attach="background" args={["#07090d"]} />
-      <fog attach="fog" args={["#07090d", 16, 30]} />
-      <ArenaLights shadows={!LOW_GRAPHICS} />
-      <Arena />
       <PileHits state={state} onPile={onPile} glowing={glowing} />
       <StatPlates state={state} targets={targets} />
       <ChainMarks state={state} targets={targets} />
@@ -235,7 +233,7 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
             onClick={(card, at) => (isPile(card.location) ? onPile(card.controller, card.location) : onCard(card, at))} onHover={onHover} />
         );
       })}
-      {fx.map((f) => {
+      <Suspense fallback={null}>{fx.map((f) => {
         const e = f.ev;
         if (e.t === "summon") { const at = vec(e.card.uid); return at ? <SummonFx key={f.id} kind={e.kind} at={at} /> : null; }
         if (e.t === "activate") { const at = vec(e.card.uid); return at ? <ActivateFx key={f.id} at={at} link={e.chainLink} /> : null; }
@@ -249,12 +247,11 @@ function Scene({ state, fx, selectable, selected, onCard, onPile, onHover, shake
           return <ShatterFx key={f.id} at={new THREE.Vector3(s.x, 0.05, s.z)} />;
         }
         return null;
-      })}
+      })}</Suspense>
     </>
   );
 }
 
-/** Dev-only: counts how often the whole scene suspends (i.e. the board blanks). */
 function BlankProbe() {
   if (import.meta.env.DEV) { const w = window as unknown as { __ygosimSceneBlanks?: number }; w.__ygosimSceneBlanks = (w.__ygosimSceneBlanks ?? 0) + 1; }
   return null;
@@ -263,9 +260,19 @@ function BlankProbe() {
 export function Board3D(props: Props) {
   return (
     <div className="board3d">
-      <Canvas shadows={!LOW_GRAPHICS} dpr={[1, 2]} camera={{ fov: 36, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
+      <Canvas shadows={!LOW_GRAPHICS && !props.low} dpr={props.low ? 1 : [1, 1.5]} camera={{ fov: 36, position: BASE_CAM.toArray(), near: 0.1, far: 60 }} gl={{ antialias: true, powerPreference: "high-performance" }}
         onPointerMissed={() => props.onHover(null)}>
+        <CameraRig shake={props.shake} />
+        <color attach="background" args={["#0c111c"]} />
+        <fog attach="fog" args={["#0c111c", 20, 40]} />
+        <ArenaLights shadows={!LOW_GRAPHICS && !props.low} />
+        <Arena />
         <Suspense fallback={<BlankProbe />}><Scene {...props} /></Suspense>
+        {!LOW_GRAPHICS && !props.low && <Suspense fallback={null}>
+          <EffectComposer multisampling={0} enableNormalPass={false}>
+            <Bloom mipmapBlur intensity={0.35} luminanceThreshold={1} luminanceSmoothing={0.2} />
+          </EffectComposer>
+        </Suspense>}
       </Canvas>
     </div>
   );

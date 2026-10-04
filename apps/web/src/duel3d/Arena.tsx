@@ -143,12 +143,11 @@ export function Arena() {
       {/* Inset light strips along the near (blue) and far (amber) rims */}
       <mesh position={[0, rimH - 0.04, d / 2 + 0.03]}>
         <boxGeometry args={[w * 0.82, 0.012, 0.03]} />
-        {/* Tone-mapped and dim enough to stay under the bloom threshold (no colour haze). */}
-        <meshBasicMaterial color="#2f63b8" />
+        <meshBasicMaterial color={new THREE.Color("#649cff").multiplyScalar(2)} toneMapped={false} />
       </mesh>
       <mesh position={[0, rimH - 0.04, -d / 2 - 0.03]}>
         <boxGeometry args={[w * 0.82, 0.012, 0.03]} />
-        <meshBasicMaterial color="#b05a22" />
+        <meshBasicMaterial color={new THREE.Color("#ffad65").multiplyScalar(2)} toneMapped={false} />
       </mesh>
       {/* Zone markings */}
       {frames.map((f) => (
@@ -163,12 +162,13 @@ export function Arena() {
 export function ArenaLights({ shadows }: { shadows: boolean }) {
   return (
     <>
-      <hemisphereLight args={["#cdd6e8", "#0d0f14", 0.5]} />
-      <directionalLight position={[2.5, 12, 4]} intensity={1.55} castShadow={shadows}
-        shadow-mapSize={[2048, 2048]} shadow-bias={-0.0004}
+      <hemisphereLight args={["#dce5f5", "#263247", 1]} />
+      <directionalLight position={[2.5, 12, 4]} intensity={2.2} castShadow={shadows}
+        shadow-mapSize={[1024, 1024]} shadow-bias={-0.0004}
         shadow-camera-left={-7} shadow-camera-right={7} shadow-camera-top={6} shadow-camera-bottom={-6} />
-      <pointLight position={[0, 2.2, 4.9]} intensity={0.6} distance={6} decay={2} color="#8ab6ff" />
-      <pointLight position={[0, 2.2, -4.9]} intensity={0.32} distance={6} decay={2} color="#ffb98a" />
+      <directionalLight position={[-5, 8, -3]} intensity={0.6} color="#dce5f5" />
+      <pointLight position={[0, 2.2, 4.9]} intensity={1} distance={6} decay={2} color="#8ab6ff" />
+      <pointLight position={[0, 2.2, -4.9]} intensity={0.65} distance={6} decay={2} color="#ffb98a" />
       
     </>
   );

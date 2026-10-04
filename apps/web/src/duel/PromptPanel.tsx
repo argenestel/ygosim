@@ -1,7 +1,9 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Prompt, PromptOption } from "@ygosim/protocol";
 import { validateSelection } from "@ygosim/protocol";
 import { CardFace } from "./CardView";
+import { useCardData } from "./Inspector";
+import { CardIcon, CardTypeBadges } from "./CardTypeBadges";
 
 const MULTI_KINDS = new Set<Prompt["kind"]>(["select_card", "select_tribute", "select_sum", "select_counter", "select_place"]);
 export const isMulti = (p: Prompt) => p.constraints?.kind !== "interactive" &&
@@ -16,10 +18,11 @@ interface Props {
 }
 
 function Opt({ o, on, disabled, onClick }: { o: PromptOption; on?: boolean; disabled?: boolean; onClick: () => void }) {
+  const data = useCardData(o.card?.code);
   return (
     <button className={`opt${on ? " on" : ""}${o.card?.code ? " has-card" : ""}`} disabled={disabled} onClick={onClick}>
       {o.card?.code !== undefined && <span className="opt-thumb"><CardFace code={o.card.code} /></span>}
-      <span>{o.label}</span>
+      <span className="opt-label"><span>{o.label}</span>{data && <CardTypeBadges types={data.type} />}</span>
     </button>
   );
 }
@@ -67,24 +70,33 @@ export function PromptPanel({ prompt, selected, toggle, submit }: Props) {
 
 /** Pop-up menu of the actions a single card offers during idle/battle. */
 export function CardMenu({ options, at, onPick, onClose }: { options: PromptOption[]; at?: { x: number; y: number }; onPick: (id: string) => void; onClose: () => void }) {
-  // Pop up next to the clicked card (clamped on screen); centre as a fallback.
-  const style = at ? { position: "absolute" as const, left: Math.min(Math.max(12, at.x + 14), window.innerWidth - 300), top: Math.min(Math.max(12, at.y - 60), window.innerHeight - 60 - options.length * 46) } : undefined;
+  const data = useCardData(options[0]?.card?.code);
+  const panel = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const dismiss = (event: PointerEvent) => { if (!panel.current?.contains(event.target as Node)) onClose(); };
+    document.addEventListener("pointerdown", dismiss);
+    return () => document.removeEventListener("pointerdown", dismiss);
+  }, [onClose]);
+  const top = at ? Math.max(12, Math.min(at.y - 60, window.innerHeight - Math.min(window.innerHeight - 24, options.length * 52 + 120))) : Math.min(160, window.innerHeight / 3);
+  const style = { left: at ? Math.max(12, Math.min(at.x + 14, window.innerWidth - 292)) : 16, top, maxHeight: window.innerHeight - top - 12 };
   return (
-    <div className={`card-menu-backdrop${at ? " anchored" : ""}`} onClick={onClose} onContextMenu={(e) => { e.preventDefault(); onClose(); }}>
-      <div className={`card-menu${at ? " compact" : ""}`} style={style} onClick={(e) => e.stopPropagation()}>
-        {!at && options[0]?.card?.code !== undefined && <div className="card-menu-art"><CardFace code={options[0].card!.code!} /></div>}
+      <div ref={panel} className="card-menu compact floating" style={style} role="dialog" aria-label="Card actions">
+        {data && <header className="card-menu-heading"><b>{data.name}</b><CardTypeBadges types={data.type} /></header>}
         <div className="card-menu-list">
           {options.map((o) => {
             const duplicates = options.filter(choice => choice.label === o.label);
             const ordinal = duplicates.findIndex(choice => choice.id === o.id) + 1;
+            const kind = o.id.startsWith("attack") ? "Equip" : o.id.startsWith("pos_change") ? "Counter"
+              : o.id.startsWith("special_summon") ? data?.type.find(type => ["Fusion", "Synchro", "Xyz", "Link", "Pendulum", "Ritual"].includes(type)) ?? "Monster"
+              : data?.type.includes("Trap") ? "Trap" : data?.type.includes("Spell") ? "Spell" : "Monster";
             return <button key={o.id} data-action-id={o.id} onClick={() => onPick(o.id)}>
-              {o.label}{duplicates.length > 1 ? ` (${o.id.startsWith("special_summon:") ? "procedure" : "choice"} ${ordinal} of ${duplicates.length})` : ""}
+              <span className="card-action-icon"><CardIcon kind={kind} /></span>
+              <span>{o.label}{duplicates.length > 1 ? ` (${o.id.startsWith("special_summon:") ? "procedure" : "choice"} ${ordinal} of ${duplicates.length})` : ""}</span>
             </button>;
           })}
           <button className="ghost" onClick={onClose}>Cancel</button>
         </div>
       </div>
-    </div>
   );
 }
 

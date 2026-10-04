@@ -4,13 +4,15 @@ import type { AgentKind, CardRef, Deck, FormatId, MatchType, PlayerIdx, PromptOp
 import { validateSelection } from "@ygosim/protocol";
 import { isMock } from "../api";
 import { isMuted, setMuted, uiClick } from "../sfx";
+import { getGraphics, setGraphics, type Graphics } from "../graphics";
 import { createMockConn } from "../mock";
 import { createFixtureConn, isFixture } from "../dev/fixture";
 import { connect, type Conn } from "../net";
 import { Board3D, type PlaceTarget } from "../duel3d/Scene3D";
 import { slotWorld } from "../duel3d/space";
 import { CardFace } from "./CardView";
-import { Inspector } from "./Inspector";
+import { Inspector, useCardData } from "./Inspector";
+import { CardTypeBadges } from "./CardTypeBadges";
 import { ActionDock, CardMenu, PromptPanel, isBoardMenu, isMulti } from "./PromptPanel";
 import { SideDeck } from "./SideDeck";
 import { DuelLog } from "./DuelLog";
@@ -28,7 +30,16 @@ export type DuelLaunch = (
   | { mode: "spectate"; roomId: string }
 ) & { format?: FormatId; match?: MatchType };
 
-const PHASES = [["draw", "DP"], ["standby", "SP"], ["main1", "M1"], ["battle", "BP"], ["main2", "M2"], ["end", "EP"]] as const;
+const PHASES = [["draw", "Draw"], ["standby", "Standby"], ["main1", "Main 1"], ["battle", "Battle"], ["main2", "Main 2"], ["end", "End"]] as const;
+
+function PileChoice({ card, selectable, selected, onPick, onPreview }: { card: CardRef; selectable: boolean; selected: boolean; onPick: () => void; onPreview: () => void }) {
+  const data = useCardData(card.code);
+  return <button data-card-uid={card.uid} className={`pile-card${selectable ? " selectable" : ""}${selected ? " selected" : ""}`} title={data?.name ?? "Hidden card"}
+    onMouseEnter={onPreview} onFocus={onPreview} onClick={onPick}>
+    {card.code !== undefined ? <CardFace code={card.code} /> : <div className="card-back small" />}
+    {data && <span className="pile-type-overlay"><CardTypeBadges types={data.type} compact /></span>}
+  </button>;
+}
 
 function useTween(target: number, ms = 700) {
   const [v, setV] = useState(target);
@@ -112,10 +123,11 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const [speed, setSpd] = useState(1);
   const [chatText, setChatText] = useState("");
   const [muted, setMute] = useState(isMuted());
+  const [graphics, setGfx] = useState<Graphics>(getGraphics());
   // EDOPro-style chain policy: auto = skip empty windows, on = always stop, off = pass optional windows.
   type ChainMode = "auto" | "on" | "off";
   const [chainMode, setChainMode] = useState<ChainMode>(() => {
-    try { const v = localStorage.getItem("ygosim.chainmode"); return v === "on" || v === "off" ? v : localStorage.getItem("ygosim.autopass") === "0" ? "on" : "auto"; } catch { return "auto"; }
+    try { const v = localStorage.getItem("ygosim.chainmode"); return v === "auto" || v === "on" || v === "off" ? v : localStorage.getItem("ygosim.autopass") === "0" ? "on" : "auto"; } catch { return "auto"; }
   });
   const cycleChainMode = () => {
     const next: ChainMode = chainMode === "auto" ? "on" : chainMode === "on" ? "off" : "auto";
@@ -137,9 +149,9 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   const autoPassId = useMemo(() => {
     const p = rawPrompt;
     if (view.fatalError || chainMode === "on" || !p || p.kind !== "select_chain") return undefined;
-    const pass = p.options.find((o) => !o.card);
-    if (!pass || (p.min ?? 0) > 0) return undefined;
-    if (chainMode === "auto" && p.options.some((o) => o.card)) return undefined;
+    const pass = p.options.find((o) => o.id === "pass");
+    if (!pass || !validateSelection(p, [pass.id]).valid) return undefined;
+    if (chainMode === "auto" && p.options.some((o) => o.id !== pass.id)) return undefined;
     return pass.id;
   }, [rawPrompt, chainMode, view.fatalError]);
   const prompt = autoPassId ? undefined : rawPrompt;
@@ -148,6 +160,11 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
   }, [autoPassId, rawPrompt, respond]);
 
   useEffect(() => { setSelected([]); setMenu(null); }, [prompt?.promptId]);
+  useEffect(() => {
+    if (!view.busy) return;
+    setMenu(null);
+    setPile(null);
+  }, [view.busy]);
 
   // Only show the "waiting" dock if no decision arrives for a moment; brief gaps between
   // engine messages otherwise make the bottom-right button flip back and forth.
@@ -269,8 +286,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
           {PHASES.map(([k, l]) => {
             const opt = phaseOption(k);
             return opt
-              ? <button key={k} className="phase-go" title={opt.label} onClick={() => submit([opt.id])}>{l}</button>
-              : <span key={k} className={state.phase === k ? `on ${state.turnPlayer === you ? "me" : "op"}` : ""}>{l}</span>;
+              ? <button key={k} className="phase-go" title={opt.label} onClick={() => submit([opt.id])}>{l} →</button>
+              : <span key={k} title={`${l} phase`} aria-current={state.phase === k ? "step" : undefined} className={state.phase === k ? `on ${state.turnPlayer === you ? "me" : "op"}` : ""}>{l}</span>;
           })}
         </div>
         <div className="top-tools">
@@ -279,6 +296,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
             title={chainMode === "auto" ? "Chain: Auto — stop only when you can respond (click for On)" : chainMode === "on" ? "Chain: On — stop at every chain window (click for Off)" : "Chain: Off — pass optional chain windows (click for Auto)"}>
             Chain: {chainMode === "auto" ? "Auto" : chainMode === "on" ? "On" : "Off"}
           </button>
+          <button title="Graphics quality — Low renders at 1x without shadows (use if the screen flickers)"
+            onClick={() => { const g: Graphics = graphics === "high" ? "low" : "high"; setGraphics(g); setGfx(g); }}>Gfx: {graphics === "high" ? "High" : "Low"}</button>
           <button title={muted ? "Unmute" : "Mute"} onClick={() => { setMuted(!muted); setMute(!muted); }}>{muted ? "🔇" : "🔊"}</button>
           {spectating
             ? <button className="ghost" onClick={onExit}>Leave</button>
@@ -287,10 +306,15 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       </div>
 
       {isMock && <div className="demo-flag">Scripted demo — not real rules. Run the server for real duels.</div>}
-      <Inspector code={hover?.code ?? pinned} />
+      <Inspector code={hover?.code ?? pinned} forceOpen={!!pile || !!menu} />
 
-      <Board3D hideOwnHand={!spectating} places={places} onPlace={onPlace} state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
-        onCard={onCard} onHover={setHover} onPile={(owner, loc) => setPile({ owner, loc })} />
+      <Board3D low={graphics === "low"} hideOwnHand={!spectating} places={places} onPlace={onPlace} state={state} fx={fx} shake={view.shake} selectable={selectable} selected={selectedUids}
+        onCard={onCard} onHover={setHover} onPile={(owner, loc) => {
+          if (view.busy) return;
+          setPinned(state.cards.find(c => c.controller === owner && c.location === loc && c.code !== undefined)?.code);
+          setHover(null);
+          setPile({ owner, loc });
+        }} />
 
       <LpBar name={view.players[you] ?? name} lp={state.lp[you]} mine active={state.turnPlayer === you} hits={hits(you)} counts={countsOf(you)} />
       {!spectating && <HandBar cards={myHand} byCard={byCard} selected={selectedUids} onCard={onCard} onHover={setHover} />}
@@ -315,32 +339,30 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
       )}
       {idle && !showWaiting && !spectating && lastDock.current && <ActionDock prompt={lastDock.current} submit={() => {}} disabled />}
       {showWaiting && !prompt && !view.result && !spectating && (
-        <div className="action-dock waiting" aria-live="polite">
-          <div className="hint-text">{view.busy ? "Resolving…" : state.turnPlayer === you ? "Waiting for a response…" : "Opponent's turn"}</div>
-          <button className="dock-main" disabled><span className="dock-spin" />{view.busy ? "Resolving" : "Waiting for opponent"}</button>
+        <div className="resolve-status" role="status" aria-live="polite">
+          <span className="dock-spin" aria-hidden="true" />
+          <span>{view.busy ? "Resolving…" : state.turnPlayer === you ? "Waiting for a response…" : "Opponent's turn"}</span>
         </div>
       )}
 
-      {menu && <CardMenu options={menu.opts} at={menu.at} onPick={(id) => submit([id])} onClose={() => setMenu(null)} />}
+      {!view.busy && menu && <CardMenu options={menu.opts} at={menu.at} onPick={(id) => submit([id])} onClose={() => setMenu(null)} />}
 
-      {pile && (
-        <div className="modal-backdrop" onClick={() => setPile(null)}>
-          <div className="pile-modal" onClick={(e) => e.stopPropagation()}>
-            <h3>{pile.owner === you ? "Your" : "Opponent's"} {pile.loc} · {pileCards.length}</h3>
+      {!view.busy && pile && (
+        <aside className="pile-panel" aria-label={`${pile.owner === you ? "Your" : "Opponent's"} ${pile.loc}`}>
+            <header><h3>{pile.owner === you ? "Your" : "Opponent's"} {pile.loc === "extra" ? "Extra Deck" : pile.loc} <small>{pileCards.length}</small></h3>
+              <button className="ghost" aria-label="Close card pile" onClick={() => { setPile(null); setHover(null); }}>✕</button></header>
+            <p className="pile-hint">Hover or focus to read · highlighted cards have actions</p>
             <div className="pile-grid">
               {pileCards.map((c) => {
                 const opts = byCard.get(c.uid);
                 return (
-                  <button key={c.uid} data-card-uid={c.uid} className={`pile-card${opts ? " selectable" : ""}${selectedUids.has(c.uid) ? " selected" : ""}`}
-                    onMouseEnter={() => setHover(c)} onClick={() => (opts ? onCard(c) : c.code !== undefined && setPinned(c.code))}>
-                    {c.code !== undefined ? <CardFace code={c.code} /> : <div className="card-back small" />}
-                  </button>
+                  <PileChoice key={c.uid} card={c} selectable={!!opts} selected={selectedUids.has(c.uid)}
+                    onPreview={() => { setHover(c); setPinned(c.code); }} onPick={() => (opts ? onCard(c) : setPinned(c.code))} />
                 );
               })}
               {!pileCards.length && <p className="muted">Empty</p>}
             </div>
-          </div>
-        </div>
+        </aside>
       )}
 
       <form className="chat" onSubmit={(e) => { e.preventDefault(); if (chatText.trim()) { send({ type: "chat", text: chatText }); setChatText(""); } }}>

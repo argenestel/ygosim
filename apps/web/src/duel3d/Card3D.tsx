@@ -28,6 +28,8 @@ interface Props {
 }
 
 const edgeMat = new THREE.MeshStandardMaterial({ color: "#1a1208", roughness: 0.6 });
+let sharedBack: THREE.MeshStandardMaterial | undefined;
+const backMat = () => (sharedBack ??= new THREE.MeshStandardMaterial({ map: backTexture(), roughness: 0.5 }));
 const geo = new THREE.BoxGeometry(CW, CH, 0.012);
 // State outline: a crisp rule just outside the card edge (no additive glow, no pulsing).
 const outlineGeo = new THREE.EdgesGeometry(new THREE.PlaneGeometry(CW * 1.1, CH * 1.08));
@@ -57,11 +59,13 @@ export const Card3D = memo(function Card3D({ card, target, visible, mine, select
     return () => { alive = false; };
   }, [card.code, visible, faceDown]);
 
-  const mats = useMemo(() => {
-    return [edgeMat, edgeMat, edgeMat, edgeMat,
-      new THREE.MeshStandardMaterial({ map: front, roughness: 0.45, metalness: 0.05 }),
-      new THREE.MeshStandardMaterial({ map: backTexture(), roughness: 0.5 })];
-  }, [front]);
+  // One front material per card, updated in place when its art loads (and freed on
+  // unmount); the back material is shared. Recreating materials per texture change
+  // leaked GPU memory over a duel.
+  const frontMat = useMemo(() => new THREE.MeshStandardMaterial({ roughness: 0.45, metalness: 0.05 }), []);
+  useEffect(() => { frontMat.map = front; frontMat.needsUpdate = true; }, [front, frontMat]);
+  useEffect(() => () => frontMat.dispose(), [frontMat]);
+  const mats = useMemo(() => [edgeMat, edgeMat, edgeMat, edgeMat, frontMat, backMat()], [frontMat]);
 
   useFrame((state, dt) => {
     const g = group.current;
