@@ -42,8 +42,7 @@ export const defaultFormats: Format[] = [
 let cached: Promise<EngineApi | null> | undefined;
 /** Lazily imports @ygosim/engine; resolves null if it is not available yet. */
 export function loadEngine(): Promise<EngineApi | null> {
-  const spec = "@ygosim/engine";
-  cached ??= import(/* @vite-ignore */ spec).then(
+  cached ??= import("@ygosim/engine").then(
     (m) => m as EngineApi,
     (e) => { console.warn(`[server] engine unavailable: ${(e as Error).message}`); return null; },
   );

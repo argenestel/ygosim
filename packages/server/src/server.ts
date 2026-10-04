@@ -373,7 +373,7 @@ export async function startServer(opts: ServerOptions = {}) {
   const addr = http.address();
   actualPort = typeof addr === "object" && addr ? addr.port : port;
   return {
-    port: actualPort, lobby, app,
+    port: actualPort, lobby, app, http,
     close: async () => {
       abortImageDownloads();
       const roomsClosed = Promise.all([...lobby.rooms.values()].map(room => room.close()));

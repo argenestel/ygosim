@@ -1,0 +1,27 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "ygoweb": {
+      "root": "apps/web",
+      "framework": "vite",
+      "buildCommand": "pnpm build",
+      "outputDirectory": "dist"
+    },
+    "ygoserver": {
+      "root": "packages/server",
+      "framework": "hono",
+      "entrypoint": "src/vercel.ts",
+      "buildCommand": "cd ../.. && bash scripts/fetch-data.sh",
+      "functions": {
+        "src/vercel.ts": {
+          "includeFiles": "{../../data/{CardScripts/**/*.lua,BabelCDB/*.cdb,LFLists/*.conf,strings.conf},../engine/{decks/*.ydk,vendor/ocgcore/*.{mjs,wasm}}}"
+        }
+      }
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": { "service": "ygoserver" } },
+    { "source": "/ws", "destination": { "service": "ygoserver" } },
+    { "source": "/(.*)", "destination": { "service": "ygoweb" } }
+  ]
+}
