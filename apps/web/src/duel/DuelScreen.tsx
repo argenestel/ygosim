@@ -19,6 +19,7 @@ import { DuelLog } from "./DuelLog";
 import { ChainCallout, ChainPanel } from "./ChainPanel";
 import { AgentWaiting } from "./AgentWaiting";
 import { useDuel } from "./useDuel";
+import type { createReplay } from "../tournament/replay";
 import { HandBar } from "./HandBar";
 
 export type DuelLaunch = (
@@ -28,6 +29,7 @@ export type DuelLaunch = (
   | { mode: "create" }
   | { mode: "join"; roomId: string }
   | { mode: "spectate"; roomId: string }
+  | { mode: "replay"; replay: ReturnType<typeof createReplay> }
 ) & { format?: FormatId; match?: MatchType };
 
 const PHASES = [["draw", "Draw"], ["standby", "Standby"], ["main1", "Main 1"], ["battle", "Battle"], ["main2", "Main 2"], ["end", "End"]] as const;
@@ -88,6 +90,7 @@ function LpBar({ name, lp, mine, active, hits, counts }: { name: string; lp: num
 
 export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch; deck: Deck; name: string; onExit: () => void }) {
   const open = useCallback((onMsg: (m: ServerMsg) => void, onClose: (why: string) => void): Conn => {
+    if (launch.mode === "replay") return launch.replay.attach(onMsg);
     const c = isFixture ? createFixtureConn(onMsg) : isMock ? createMockConn(onMsg) : connect(onMsg, onClose);
     c.send({ type: "hello", name, kind: "human" });
     const rules = { format: launch.format, match: launch.match };
@@ -273,7 +276,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
     return { hand: n("hand"), deck: n("deck"), grave: n("grave"), banished: n("banished"), extra: n("extra") };
   };
   const myHand = state.cards.filter((c) => c.controller === you && c.location === "hand");
-  const spectating = launch.mode === "spectate" || launch.mode === "watch";
+  const spectating = launch.mode === "spectate" || launch.mode === "watch" || launch.mode === "replay";
   const pileCards = pile ? state.cards.filter((c) => c.controller === pile.owner && c.location === pile.loc).sort((a, b) => b.sequence - a.sequence) : [];
 
   return (
@@ -333,7 +336,7 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         )}
       </AnimatePresence>
 
-      {spectating && <div className="spectate-flag">Spectating · hands hidden</div>}
+      {spectating && launch.mode !== "replay" && <div className="spectate-flag">Spectating · hands hidden</div>}
       {prompt && !view.result && !spectating && (
         <PromptPanel prompt={prompt} selected={selected} toggle={toggle} submit={submit} />
       )}
@@ -376,7 +379,8 @@ export function DuelScreen({ launch, deck, name, onExit }: { launch: DuelLaunch;
         {view.result && (
           <motion.div className={`result ${view.result.winner === you ? "win" : view.result.winner === null ? "draw" : "lose"}`} initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.6 }}>
             <motion.h1 initial={{ scale: 2.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ delay: 0.8, type: "spring", stiffness: 120 }}>
-              {view.result.winner === you ? "VICTORY" : view.result.winner === null ? "DRAW" : "DEFEAT"}
+              {spectating ? (view.result.winner === null ? "DRAW" : `${view.players[view.result.winner] ?? `Player ${view.result.winner + 1}`} wins`)
+                : view.result.winner === you ? "VICTORY" : view.result.winner === null ? "DRAW" : "DEFEAT"}
             </motion.h1>
             <p>{view.result.reason}</p>
             {view.match === "match" && view.score && <p className="score-line">Match {view.score[you]} – {view.score[opp]}</p>}

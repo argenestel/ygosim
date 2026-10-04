@@ -508,3 +508,84 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
 @media (max-height: 600px) { .pile-panel { top: 148px; bottom: 16px; } .inspector.pile-details { top: 148px !important; max-height: calc(100vh - 164px) !important; } }
 .action-dock.held .dock-main { opacity: 0.55; filter: saturate(0.4); }
 .action-dock.held .hint-text { color: var(--faint); }
+
+/* ---------- Agent tournament ---------- */
+.tourney { max-width: 1240px; margin: 0 auto; padding: 28px 28px 60px; }
+.tourney .page-head select { min-width: 260px; }
+.small { font-size: 0.75rem; }
+.t-meta { margin: -10px 0 12px; flex-wrap: wrap; }
+.t-roster { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 18px; }
+.t-roster small { color: var(--faint); font-weight: 500; }
+.t-section { margin-bottom: 30px; }
+.t-section h2 { font-size: 1.15rem; margin-bottom: 8px; color: var(--gold-hi); }
+.t-section > .muted { margin: -2px 0 10px; }
+.t-table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: 12px; background: rgba(15, 21, 32, 0.75); }
+.t-table { width: 100%; border-collapse: collapse; font-size: 0.85rem; }
+.t-table th, .t-table td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--line); white-space: nowrap; }
+.t-table thead th { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.08em; color: var(--dim); background: var(--bg-2); position: sticky; top: 0; }
+.t-table tbody tr:last-child td, .t-table tbody tr:last-child th { border-bottom: none; }
+.t-table tbody tr:hover { background: rgba(255, 255, 255, 0.025); }
+.t-table .n { text-align: right; font-variant-numeric: tabular-nums; }
+.t-table td.muted.small { white-space: normal; min-width: 180px; }
+.t-table .rank { color: var(--gold); font-family: var(--head); font-weight: 700; }
+.t-table tbody tr:first-child .rank { color: var(--gold-hi); }
+.bar { display: inline-block; min-width: 54px; padding: 1px 6px; border-radius: 5px; background: linear-gradient(90deg, rgba(214, 177, 94, 0.28) var(--w), transparent var(--w)); }
+.t-table.cross th, .t-table.cross td.c { text-align: center; }
+.t-table.cross tbody th { text-align: left; font-weight: 600; }
+.t-table.cross td.self { background: repeating-linear-gradient(45deg, transparent 0 6px, var(--line) 6px 7px); }
+.t-table.cross td button { padding: 3px 10px; min-width: 40px; font-weight: 700; font-size: 0.78rem; background: var(--panel-2); }
+.t-table.cross .res-W button { color: var(--green); border-color: rgba(69, 201, 138, 0.35); }
+.t-table.cross .res-L button { color: #ff9b95; border-color: rgba(229, 83, 75, 0.3); }
+.t-table.cross .res-D button { color: var(--gold-hi); }
+.t-table.cross .res-live button { color: var(--cyan); }
+.t-list { display: flex; flex-direction: column; gap: 8px; }
+.t-list-item { display: flex; align-items: center; gap: 12px; text-align: left; padding: 12px 16px; flex-wrap: wrap; }
+.t-games { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.t-game { display: flex; flex-direction: column; gap: 6px; text-align: left; padding: 12px 14px; align-items: stretch; }
+.t-game.running { border-color: rgba(92, 200, 242, 0.45); }
+.t-game.pending { opacity: 0.6; }
+.t-game-head { display: flex; justify-content: space-between; align-items: center; }
+.t-seat { display: flex; flex-direction: column; padding: 5px 8px; border-radius: 7px; border-left: 3px solid var(--line-2); }
+.t-seat.won { border-left-color: var(--gold); background: rgba(214, 177, 94, 0.08); }
+.t-seat.lost { opacity: 0.65; }
+.t-decks { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 14px; }
+.t-deck { display: flex; flex-direction: column; gap: 8px; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg-2); }
+.t-deck.won { border-color: rgba(214, 177, 94, 0.45); }
+.t-deck h3 { font-size: 1rem; }
+.t-deck blockquote { margin: 0; padding: 8px 12px; border-left: 3px solid var(--gold-lo); color: #c9d1df; font-size: 0.84rem; line-height: 1.5; white-space: pre-wrap; max-height: 160px; overflow: auto; }
+.t-stats { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: 0.78rem; color: var(--dim); }
+.t-stats b { color: var(--text); }
+.t-tabs { margin-bottom: 8px; flex-wrap: wrap; }
+.t-decisions { list-style: none; margin: 0; padding: 0; max-height: 46vh; overflow: auto; display: flex; flex-direction: column; gap: 6px; }
+.t-decisions li { padding: 8px 10px; border-radius: 8px; background: var(--bg-2); border: 1px solid var(--line); font-size: 0.84rem; }
+.t-decisions li p { margin: 4px 0 0; color: #c9d1df; line-height: 1.45; }
+@media (max-width: 720px) {
+  .tourney { padding: 18px 16px 40px; }
+  .t-decks { grid-template-columns: 1fr; }
+  .tourney .page-head { flex-wrap: wrap; }
+  .tourney .page-head select { min-width: 0; width: 100%; }
+}
+
+/* Replay viewer overlays the spectator duel screen. */
+.replay-bar { position: fixed; z-index: 80; left: 50%; bottom: 14px; transform: translateX(-50%); display: flex; align-items: center; gap: 6px; padding: 7px 10px; width: min(760px, calc(100vw - 24px)); background: rgba(10, 14, 22, 0.94); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5); }
+.replay-bar button { padding: 5px 9px; font-size: 0.8rem; }
+.replay-bar button.on { border-color: var(--gold); color: var(--gold-hi); }
+.replay-bar input[type="range"] { flex: 1; min-width: 60px; accent-color: var(--gold); padding: 0; }
+.replay-title { font-family: var(--head); font-size: 0.82rem; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.replay-time { font-size: 0.75rem; color: var(--dim); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.reasoning { position: fixed; z-index: 75; right: 16px; top: 118px; bottom: 76px; width: 340px; display: flex; flex-direction: column; background: rgba(10, 14, 22, 0.95); border: 1px solid var(--line-2); border-radius: 12px; }
+.reasoning header { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--line); }
+.reasoning header b { font-family: var(--head); letter-spacing: 0.08em; }
+.reasoning .seg button { padding: 4px 8px; font-size: 0.72rem; }
+.reasoning ol { list-style: none; margin: 0; padding: 6px; overflow: auto; flex: 1; display: flex; flex-direction: column; gap: 6px; }
+.reasoning li { padding: 8px 10px; border-radius: 8px; background: var(--panel); border-left: 3px solid var(--cyan); font-size: 0.8rem; cursor: pointer; }
+.reasoning li.s1 { border-left-color: var(--red); }
+.reasoning li:hover { background: var(--panel-2); }
+.reasoning li .meta { display: flex; gap: 8px; color: var(--dim); font-size: 0.7rem; }
+.reasoning li .meta b { color: var(--text); margin-right: auto; }
+.reasoning li .pick { margin-top: 3px; font-weight: 600; }
+.reasoning li p { margin: 4px 0 0; color: #c9d1df; line-height: 1.45; }
+@media (max-width: 720px) {
+  .reasoning { left: 16px; right: 16px; width: auto; top: auto; height: 40vh; }
+  .replay-title, .replay-time { display: none; }
+}

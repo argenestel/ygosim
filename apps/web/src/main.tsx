@@ -7,6 +7,8 @@ import type { DuelLaunch } from "./duel/DuelScreen";
 import { DeckEditor } from "./screens/DeckEditor";
 import { DeckList } from "./screens/DeckList";
 import { Home } from "./screens/Home";
+import { TournamentScreen } from "./tournament/TournamentScreen";
+import type { TGame, Tournament } from "./tournament/api";
 import "./styles.css";
 
 /** Dev-only probe: counts how often the app-level loading screen replaces the duel. */
@@ -17,8 +19,9 @@ function ArenaFallback() {
 
 // The 3D duel (three.js) is split out so the menus load instantly.
 const DuelScreen = lazy(() => import("./duel/DuelScreen").then((m) => ({ default: m.DuelScreen })));
+const ReplayScreen = lazy(() => import("./tournament/ReplayScreen").then((m) => ({ default: m.ReplayScreen })));
 
-type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: "duel"; launch: DuelLaunch; key: number };
+type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: "duel"; launch: DuelLaunch; key: number } | { s: "tourney" } | { s: "replay"; t: Tournament; g: TGame };
 
 function App() {
   const [screen, setScreen] = useState<Screen>({ s: "home" });
@@ -28,6 +31,13 @@ function App() {
   useEffect(() => { seedSampleDecks(listPresetDecks); }, []);
 
   if (screen.s === "edit") return <DeckEditor id={screen.id} onBack={() => setScreen({ s: "decks" })} />;
+  if (screen.s === "replay") {
+    return (
+      <Suspense fallback={<ArenaFallback />}>
+        <ReplayScreen t={screen.t} game={screen.g} onExit={() => setScreen({ s: "tourney" })} />
+      </Suspense>
+    );
+  }
   if (screen.s === "duel") {
     return (
       <Suspense fallback={<ArenaFallback />}>
@@ -44,6 +54,7 @@ function App() {
         <nav className="nav">
           <button className={screen.s === "home" ? "on" : ""} onClick={() => setScreen({ s: "home" })}>Duel</button>
           <button className={screen.s === "decks" ? "on" : ""} onClick={() => setScreen({ s: "decks" })}>Decks</button>
+          <button className={screen.s === "tourney" ? "on" : ""} onClick={() => setScreen({ s: "tourney" })}>Tournament</button>
         </nav>
         <span className="spacer" />
         <label className="player-pill" title="Your duelist name">
@@ -53,6 +64,7 @@ function App() {
       </header>
       <main className="page">
         {screen.s === "home" && <Home onPlay={(launch) => setScreen({ s: "duel", launch, key: Date.now() })} onDecks={() => setScreen({ s: "decks" })} onEdit={(id) => setScreen({ s: "edit", id })} />}
+        {screen.s === "tourney" && <TournamentScreen onReplay={(t, g) => setScreen({ s: "replay", t, g })} />}
         {screen.s === "decks" && <DeckList onEdit={(id) => setScreen({ s: "edit", id })} />}
       </main>
     </div>
