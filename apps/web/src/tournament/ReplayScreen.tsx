@@ -1,27 +1,55 @@
 import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { DuelScreen } from "../duel/DuelScreen";
 import { createReplay } from "./replay";
-import { getDecisions, getReplay, relTime, secs, type Decision, type TGame, type Tournament } from "./api";
+import { chosenText, getReplay, getTournament, relTime, secs, tailDecisions, tailReplay, type Decision, type TGame, type Tournament } from "./api";
+import { usePoll, useTail } from "./hooks";
 
 type Row = Decision & { pid: string; rt: number };
 
 export function ReplayScreen({ t, game, onExit }: { t: Tournament; game: TGame; onExit: () => void }) {
   const [replay, setReplay] = useState<ReturnType<typeof createReplay> | null>(null);
-  const [rows, setRows] = useState<Row[]>([]);
   const [err, setErr] = useState<string>();
   const label = (pid: string) => t.players.find((p) => p.id === pid)?.label ?? pid;
 
+  // The game may still be running: follow it until the tournament reports it finished.
+  const [fresh] = usePoll(() => getTournament(t.id), [t.id], (x) => (x?.games.find((g) => g.id === game.id)?.status ?? game.status) === "running" && 3000);
+  const status = fresh?.games.find((g) => g.id === game.id)?.status ?? game.status;
+  const live = status === "running";
+  const seats = game.seats;
+  const d0 = useTail<Decision>((from) => tailDecisions(t.id, game.id, seats[0], from), `${t.id}/${game.id}/${seats[0]}`, live);
+  const d1 = useTail<Decision>((from) => tailDecisions(t.id, game.id, seats[1], from), `${t.id}/${game.id}/${seats[1]}`, live);
+  const rows = useMemo<Row[]>(() => [...d0.rows.map((d) => ({ ...d, pid: seats[0], rt: relTime(d, game) })), ...d1.rows.map((d) => ({ ...d, pid: seats[1], rt: relTime(d, game) }))].sort((a, b) => a.rt - b.rt),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [d0.rows, d1.rows, game.startedAt]);
+
   useEffect(() => {
-    let live = true;
+    let on = true;
     getReplay(t.id, game.id).then((frames) => {
-      if (!live) return;
-      if (!frames.length) return setErr("This game has no recorded frames yet.");
+      if (!on) return;
+      if (!frames.length && game.status !== "running") return setErr("This game has no recorded frames yet.");
+      if (!frames.length) return setErr("The game has started but no board frames have been recorded yet — try again in a moment.");
       setReplay(createReplay(frames));
-    }).catch((e) => live && setErr(String(e.message ?? e)));
-    Promise.all(game.seats.map((pid) => getDecisions(t.id, game.id, pid).then((ds) => ds.map((d) => ({ ...d, pid, rt: relTime(d, game) }))).catch(() => [] as Row[])))
-      .then((all) => live && setRows(all.flat().sort((a, b) => a.rt - b.rt)));
-    return () => { live = false; };
-  }, [t.id, game]);
+    }).catch((e) => on && setErr(String(e.message ?? e)));
+    return () => { on = false; };
+  }, [t.id, game.id, game.status]);
+
+  // Keep appending frames while live; one more pass after it ends catches the tail.
+  useEffect(() => {
+    if (!replay) return;
+    replay.live = live;
+    let on = true, timer: ReturnType<typeof setTimeout> | undefined, finals = live ? 0 : 1;
+    const tick = async () => {
+      if (!on) return;
+      try {
+        const { rows: more } = await tailReplay(t.id, game.id, replay.frames.length);
+        if (!on) return;
+        replay.append(more);
+      } catch { /* keep trying while live */ }
+      if (live || finals-- > 0) timer = setTimeout(tick, live ? 1500 : 800);
+    };
+    tick();
+    return () => { on = false; clearTimeout(timer); };
+  }, [replay, live, t.id, game.id]);
 
   if (err) return <div className="duel-wait"><h2>Replay unavailable</h2><p className="muted">{err}</p><button onClick={onExit}>Back</button></div>;
   if (!replay) return <div className="duel-wait"><div className="spinner" /><h2>Loading replay…</h2></div>;
@@ -34,7 +62,7 @@ export function ReplayScreen({ t, game, onExit }: { t: Tournament; game: TGame; 
 }
 
 function useReplayTick(replay: ReturnType<typeof createReplay>) {
-  return useSyncExternalStore(replay.subscribe, () => `${replay.index}|${replay.playing}|${replay.rate}`);
+  return useSyncExternalStore(replay.subscribe, () => `${replay.index}|${replay.playing}|${replay.rate}|${replay.frames.length}|${replay.live}`);
 }
 
 function ReplayDock({ replay, rows, seats, label, title }: { replay: ReturnType<typeof createReplay>; rows: Row[]; seats: [string, string]; label: (p: string) => string; title: string }) {
@@ -58,6 +86,7 @@ function ReplayDock({ replay, rows, seats, label, title }: { replay: ReturnType<
         <input type="range" min={0} max={replay.frames.length} value={replay.index} aria-label="Seek"
           onChange={(e) => replay.seek(Number(e.target.value))} />
         <span className="replay-time">{secs(now)} / {secs(end)}</span>
+        {replay.live && <button className={replay.index >= replay.frames.length ? "on" : ""} onClick={() => { replay.seek(replay.frames.length); replay.play(); }} title="Jump to the live edge">● Live</button>}
         {[1, 2, 4, 8].map((r) => <button key={r} className={replay.rate === r ? "on" : ""} onClick={() => replay.setRate(r)}>{r}×</button>)}
         <button className={open ? "on" : ""} onClick={() => setOpen(!open)}>Reasoning</button>
       </div>
@@ -74,7 +103,7 @@ function ReplayDock({ replay, rows, seats, label, title }: { replay: ReturnType<
             {shown.map((r, i) => (
               <li key={i} className={r.pid === seats[0] ? "s0" : "s1"} onClick={() => seekTime(r.rt)} title="Jump here">
                 <div className="meta"><b>{label(r.pid)}</b>{r.turn !== undefined && <span>T{r.turn}</span>}{r.phase && <span>{r.phase}</span>}{r.ms !== undefined && <span>{secs(r.ms)}</span>}</div>
-                <div className="pick">→ {r.choose.map((c) => (typeof c === "number" && r.options?.[c - 1]) || String(c)).join(", ") || "(pass)"}</div>
+                <div className="pick">→ {chosenText(r)}</div>
                 {r.reason ? <p>{r.reason}</p> : <p className="muted">No reason given.</p>}
               </li>
             ))}

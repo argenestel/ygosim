@@ -589,3 +589,18 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
   .reasoning { left: 16px; right: 16px; width: auto; top: auto; height: 40vh; }
   .replay-title, .replay-time { display: none; }
 }
+
+/* Tournament live feeds */
+.t-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; margin-bottom: 8px; }
+.t-toolbar .t-tabs { margin-bottom: 0; }
+.t-feed { position: relative; }
+.t-decisions li.s0 { border-left: 3px solid var(--gold-lo); }
+.t-decisions li.s1 { border-left: 3px solid rgba(92, 200, 242, 0.55); }
+.t-decisions li.bad { border-color: rgba(229, 83, 75, 0.4); }
+.t-mono li > div { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 0.78rem; white-space: pre-wrap; word-break: break-word; color: #c9d1df; }
+.t-mono li.raw-think > div { color: var(--dim); font-style: italic; }
+.t-mono li.raw-tool { border-left: 3px solid var(--gold-lo); }
+.t-mono li.raw-error { border-color: rgba(229, 83, 75, 0.4); }
+.t-rawbar { justify-content: space-between; margin-bottom: 6px; }
+.t-jump { position: absolute; right: 14px; bottom: 12px; padding: 4px 12px; font-size: 0.78rem; background: var(--panel-3); border: 1px solid var(--line-2); border-radius: 99px; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.5); }
+.tourney .page-head .ghost.on { color: var(--green); border-color: rgba(69, 201, 138, 0.3); }

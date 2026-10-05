@@ -26,6 +26,7 @@ type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: 
 function App() {
   const [screen, setScreen] = useState<Screen>({ s: "home" });
   const [name, setName] = useState(playerName());
+  const [tourneyId, setTourneyId] = useState("board"); // survives opening a replay and coming back
   const [cover, setCover] = useState(() => { const p = activeProfile(); return p ? coverOf(p) : undefined; });
   useEffect(() => onDecksChanged(() => { const p = activeProfile(); setCover(p ? coverOf(p) : undefined); }), []);
   useEffect(() => { seedSampleDecks(listPresetDecks); }, []);
@@ -64,7 +65,7 @@ function App() {
       </header>
       <main className="page">
         {screen.s === "home" && <Home onPlay={(launch) => setScreen({ s: "duel", launch, key: Date.now() })} onDecks={() => setScreen({ s: "decks" })} onEdit={(id) => setScreen({ s: "edit", id })} />}
-        {screen.s === "tourney" && <TournamentScreen onReplay={(t, g) => setScreen({ s: "replay", t, g })} />}
+        {screen.s === "tourney" && <TournamentScreen selected={tourneyId} onSelect={setTourneyId} onReplay={(t, g) => setScreen({ s: "replay", t, g })} />}
         {screen.s === "decks" && <DeckList onEdit={(id) => setScreen({ s: "edit", id })} />}
       </main>
     </div>

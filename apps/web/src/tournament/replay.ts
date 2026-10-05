@@ -19,6 +19,10 @@ export interface ReplayControl {
   subscribe(fn: () => void): () => void;
   /** Recorded time (ms) of the frame most recently delivered. */
   now(): number;
+  /** True while the source game is still running: reaching the end waits for more frames instead of stopping. */
+  live: boolean;
+  /** Add frames recorded after this replay was created (live games). */
+  append(more: Frame[]): void;
 }
 
 /** Real-time gaps are capped so long LLM thinking pauses don't stall playback. */
@@ -31,9 +35,9 @@ export function createReplay(frames: Frame[]): ReplayControl & { attach(onMsg: (
   const notify = () => subs.forEach((f) => f());
 
   const ctl = {
-    frames, index: 0, playing: true, rate: 1,
+    frames, index: 0, playing: true, rate: 1, live: false,
     now: () => frames[Math.max(0, ctl.index - 1)]?.t ?? 0,
-    play() { if (ctl.index >= frames.length) ctl.seek(0); ctl.playing = true; schedule(); notify(); },
+    play() { if (ctl.index >= frames.length && !ctl.live) ctl.seek(0); ctl.playing = true; schedule(); notify(); },
     pause() { ctl.playing = false; clearTimeout(timer); notify(); },
     setRate(r: number) { ctl.rate = r; schedule(); notify(); },
     seek(i: number) {
@@ -50,6 +54,12 @@ export function createReplay(frames: Frame[]): ReplayControl & { attach(onMsg: (
       if (state) onMsg?.(state);
       ctl.index = i;
       schedule();
+      notify();
+    },
+    append(more: Frame[]) {
+      if (!more.length) return;
+      frames.push(...more);
+      schedule(); // wakes playback if we had caught up with the live edge
       notify();
     },
     subscribe(fn: () => void) { subs.add(fn); return () => { subs.delete(fn); }; },
@@ -70,7 +80,7 @@ export function createReplay(frames: Frame[]): ReplayControl & { attach(onMsg: (
       const f = frames[ctl.index++];
       // Prompts are private; spectators only ever see the board they carry.
       onMsg?.(f.msg.type === "prompt" ? { type: "events", events: [], state: f.msg.state } : f.msg);
-      if (ctl.index >= frames.length) ctl.playing = false;
+      if (ctl.index >= frames.length && !ctl.live) ctl.playing = false;
       notify();
       schedule();
     }, gap / ctl.rate);
