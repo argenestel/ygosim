@@ -1,10 +1,11 @@
 import type { ServerMsg } from '@ygosim/protocol';
 
 export type Cli = "codex" | "pi" | "claude";
-export type GameStage = "round-robin" | "final";
+export type GameStage = "round-robin" | "final" | "series";
 export type GameStatus = "pending" | "running" | "done" | "error";
 export type TournamentStatus = "running" | "done";
 export type DeckSource = "sample" | "custom";
+export type DeckPolicy = "choice" | "custom-only";
 
 export interface Player {
   id: string;
@@ -20,6 +21,8 @@ export interface DeckInfo {
   reason: string;
   main: number[];
   extra: number[];
+  side?: number[];
+  fingerprint?: string;
 }
 
 export interface GameStats {
@@ -29,6 +32,8 @@ export interface GameStats {
   toolCalls: number;
   resumes: number;
   reasonsGiven: number;
+  timedDecisions?: number;
+  latencyKind?: "response";
 }
 
 export interface Game {
@@ -45,6 +50,11 @@ export interface Game {
   decks: Record<string, DeckInfo>;
   stats: Record<string, GameStats>;
   error?: string;
+  seed?: number;
+  cycle?: number;
+  attempt?: number;
+  models?: Record<string, string>;
+  efforts?: Record<string, string>;
 }
 
 export interface Tournament {
@@ -52,9 +62,29 @@ export interface Tournament {
   name: string;
   createdAt: string;
   status: TournamentStatus;
-  format: "round-robin+final";
+  format: "round-robin+final" | "best-of-three";
   players: Player[];
   games: Game[];
+  scored?: boolean;
+  deckPolicy?: DeckPolicy;
+  audit?: {
+    revision: string;
+    sourceHash: string;
+    dirty: boolean;
+    node: string;
+    cliVersions: Record<string, string>;
+    server: string;
+    decisionTimeoutMs: number;
+    maxInvalid: number;
+    maxMinutes?: number;
+    seed: number;
+    cycles: number;
+    mirrored: boolean;
+    validatedBy?: string;
+    deckPolicy?: DeckPolicy;
+  };
+  validation?: { passed: boolean; checkedPlayers: string[]; missingPlayers: string[] };
+  series?: { bestOf: 3; seed: number; wins: Record<string, number>; winner: string | null; complete: boolean };
 }
 
 export interface Standing {
@@ -104,7 +134,11 @@ export interface Decision {
   options: string[];
   choose: (string | number)[];
   reason: string;
-  ms: number;
+  ms?: number;
+  toolMs?: number;
+  latencyKind?: "response";
+  optionIds?: string[];
+  selected?: string[];
 }
 
 export interface ToolCall {

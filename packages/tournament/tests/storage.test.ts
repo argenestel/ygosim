@@ -2,7 +2,7 @@ import { mkdtempSync, mkdirSync, rmSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { atomicWrite, readTournaments, tournamentDir } from "../src/storage.js";
+import { atomicWrite, getLeaderboard, readTournaments, tournamentDir } from "../src/storage.js";
 import type { Tournament } from "../src/types.js";
 
 const roots: string[] = [];
@@ -37,5 +37,14 @@ describe("tournament storage", () => {
     mkdirSync(dataDir, { recursive: true });
     symlinkSync(outside, join(dataDir, "linked"), "dir");
     expect(readTournaments(dataDir)).toEqual([]);
+  });
+  it("keeps legacy and validation players out of the official leaderboard without hiding their records", () => {
+    const root = mkdtempSync(join(tmpdir(), "ygosim-official-")); roots.push(root);
+    for (const [id, scored] of [["legacy", undefined], ["validation", false], ["official", true]] as const) {
+      const value = { ...tournament(id), scored, players: [{ id, label: id, cli: "codex" as const, model: "fixture" }] };
+      atomicWrite(join(root, id, "tournament.json"), value);
+    }
+    expect(readTournaments(root)).toHaveLength(3);
+    expect(getLeaderboard(root).players.map(player => player.id)).toEqual(["official"]);
   });
 });

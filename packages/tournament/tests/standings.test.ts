@@ -193,3 +193,12 @@ it('breaks equal points by Elo and counts done games with optional timestamps ab
   expect(standings[0]!.points).toBe(standings[1]!.points);
   expect(standings[0]!.elo).toBeGreaterThan(standings[1]!.elo);
 });
+
+it('weights response latency by timed submissions rather than all decisions', () => {
+  const players = ['a', 'b'].map(id => ({ id, label: id, cli: 'codex' as const, model: 'model' }));
+  const games: Tournament['games'] = [10, 30].map((avgDecisionMs, index) => ({
+    id: `g${index}`, stage: 'round-robin', round: 1, seats: ['a', 'b'], status: 'done', winner: 'a', decks: {},
+    stats: { a: { decisions: 100, timedDecisions: index + 1, latencyKind: 'response', avgDecisionMs, invalid: 0, toolCalls: 100, resumes: 0, reasonsGiven: 100 } },
+  }));
+  expect(computeStandings(players, games).find(player => player.id === 'a')!.avgDecisionMs).toBeCloseTo(70 / 3);
+});

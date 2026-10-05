@@ -4,7 +4,7 @@ import { GameClient, type WaitResult } from "./client.js";
 import { fetchSampleDecks, resolveDeck } from "./deck.js";
 import { collectCodes, formatCardDataStats, formatStat, renderEvents, renderPrompt, renderState } from "./render.js";
 
-export interface Config { baseUrl: string; name: string }
+export interface Config { baseUrl: string; name: string; tournament?: { controlToken: string; seed?: number } }
 
 export function configFromEnv(env = process.env): Config {
   const baseUrl = (env.YGOSIM_URL ?? "ws://localhost:7777").replace(/\/+$/, "");
@@ -106,7 +106,7 @@ export class Session {
         description: "Create a duel room. Set vsAI=true to duel the built-in AI immediately. Deck: sample name, ydk text, or passcode lists. Then call wait_for_turn.",
         shape: { vsAI: z.boolean().default(true), level: z.enum(["easy", "normal", "hard"]).default("normal").describe("AI difficulty"), ...deckShape },
         run: async (a) => {
-          const room = await c.createRoom(await this.deckFrom(a), a.vsAI ?? true, a.level ?? "normal");
+          const room = await c.createRoom(await this.deckFrom(a), a.vsAI ?? true, a.level ?? "normal", this.cfg.tournament);
           return `Room ${room.roomId} created (status ${room.status}, players ${room.players.join(", ")}). Now call wait_for_turn.`;
         },
       },

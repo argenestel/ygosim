@@ -39,13 +39,14 @@ export function buildApi(
 ) {
   const app = new Hono();
   app.use("/api/*", bodyLimit({ maxSize: 64 * 1024 }));
-  app.use("/api/*", cors());
+  app.use("/api/*", cors({ exposeHeaders: ["X-Frame-Count", "X-Row-Count"] }));
 
   app.get("/api/health", (c) => c.json({ ok: true, db: !!getDb() }));
   app.get("/api/ready", (c) => {
     const ready = !!getEngine() && !!getDb();
     return c.json({ ready }, ready ? 200 : 503);
   });
+  app.get("/api/tournament-capabilities", (c) => c.json({ version: 1, adjudication: true, decisionPolicy: "forfeit", seededGames: true, ...lobby.tournamentLimits }));
   app.use("/api/agents/*", async (c, next) => {
     if (c.req.method !== "POST") return next();
     const peer = (c.env as { incoming?: IncomingMessage } | undefined)?.incoming?.socket.remoteAddress;

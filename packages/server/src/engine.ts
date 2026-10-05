@@ -4,9 +4,9 @@ export interface EngineApi {
   createDuel(opts: DuelOptions): Promise<Duel>;
   loadCardDb(): Promise<CardDb>;
   parseYdk(text: string): Deck;
-  listFormats(): Promise<Format[]>;
+  listFormats(): Format[] | Promise<Format[]>;
   getBanlist(format: FormatId): Map<number, 0 | 1 | 2> | null | Promise<Map<number, 0 | 1 | 2> | null>;
-  validateDeck(deck: Deck, format: FormatId, db: CardDb): Promise<{ ok: boolean; errors: string[] }>;
+  validateDeck(deck: Deck, format: FormatId, db: CardDb): { ok: boolean; errors: string[] } | Promise<{ ok: boolean; errors: string[] }>;
 }
 
 /** Local fallback .ydk parser (same format as YGOPro). */

@@ -19,6 +19,7 @@ interface Accumulator {
   turnsGames: number;
   decisions: number;
   decisionMs: number;
+  timedDecisions: number;
   invalid: number;
   reasonsGiven: number;
   crashes: number;
@@ -59,6 +60,7 @@ function makeAccumulator(player: Player): Accumulator {
     turnsGames: 0,
     decisions: 0,
     decisionMs: 0,
+    timedDecisions: 0,
     invalid: 0,
     reasonsGiven: 0,
     crashes: 0,
@@ -117,7 +119,9 @@ function addGameStats(acc: Accumulator, game: Game, id: string): void {
   if (!stats) return;
   const decisions = Math.max(0, finite(stats.decisions));
   acc.decisions += decisions;
-  acc.decisionMs += decisions * Math.max(0, finite(stats.avgDecisionMs));
+  const timed = stats.latencyKind === 'response' ? Math.max(0, finite(stats.timedDecisions)) : decisions;
+  acc.timedDecisions += timed;
+  acc.decisionMs += timed * Math.max(0, finite(stats.avgDecisionMs));
   acc.invalid += Math.max(0, finite(stats.invalid));
   acc.reasonsGiven += Math.max(0, finite(stats.reasonsGiven));
 }
@@ -147,7 +151,7 @@ function toStanding(acc: Accumulator): Standing {
     points: acc.points,
     winRate: acc.played ? acc.wins / acc.played : 0,
     avgTurns: acc.turnsGames ? acc.turnsTotal / acc.turnsGames : 0,
-    avgDecisionMs: acc.decisions ? acc.decisionMs / acc.decisions : 0,
+    avgDecisionMs: acc.timedDecisions ? acc.decisionMs / acc.timedDecisions : 0,
     invalidRate: acc.decisions ? acc.invalid / acc.decisions : 0,
     reasonRate: acc.decisions ? acc.reasonsGiven / acc.decisions : 0,
     crashes: acc.crashes,
@@ -273,6 +277,7 @@ export function computeLeaderboard(
   const seen = new Set<string>();
   const games: Game[] = [];
   for (const tournament of tournaments) {
+    if (tournament.scored === false) continue;
     for (const player of tournament.players) {
       if (!seen.has(player.id)) {
         seen.add(player.id);

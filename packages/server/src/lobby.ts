@@ -21,6 +21,10 @@ export class Lobby {
     private maxRooms = 100,
   ) {}
 
+  get tournamentLimits() {
+    return { decisionTimeoutMs: this.roomOpts.turnTimeoutMs ?? 180_000, maxInvalid: this.roomOpts.maxInvalid ?? 5 };
+  }
+
   connect(send: (m: ServerMsg) => void): Session {
     const s: Session = { id: `c${++clientCounter}`, name: `player${clientCounter}`, kind: "human", send, hello: false };
     send({ type: "welcome", clientId: s.id });
@@ -103,7 +107,7 @@ export class Lobby {
         if (this.rooms.size >= this.maxRooms) return err("server room limit reached; retry later");
 
         // Create room only after validation passes
-        const room = new Room(this.createDuel, this.roomOpts, undefined, format, match);
+        const room = new Room(this.createDuel, { ...this.roomOpts, ...(msg.tournament?.seed !== undefined ? { seed: msg.tournament.seed } : {}) }, undefined, format, match, msg.tournament);
         this.rooms.set(room.id, room);
         if (msg.spectateOnly || msg.opponent && msg.opponent.kind !== "bot") this.agentRooms.add(room);
 
@@ -200,6 +204,9 @@ export class Lobby {
       case "surrender":
         if (!s.room) return err("not in a room");
         return s.room.surrender(s);
+      case "adjudicate":
+        if (!s.room || !s.room.adjudicate(msg.controlToken, msg.winner, msg.reason)) return err("tournament adjudication denied");
+        return;
       default:
         return err(`unknown message type ${(msg as { type: string }).type}`);
     }
@@ -242,6 +249,7 @@ function validMessage(msg: ClientMsg): boolean {
   });
   const roomId = (value: string) => typeof value === "string" && value.length > 0 && value.length <= 64;
   const level = (value: unknown) => value === undefined || ["easy", "normal", "hard"].includes(value as string);
+  const controlToken = (value: unknown) => typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
   switch (msg.type) {
     case "hello": return typeof msg.name === "string" && msg.name.length <= 32 && ["human", "agent"].includes(msg.kind);
     case "create_room": return deck(msg.deck) && (!msg.opponentDeck || deck(msg.opponentDeck))
@@ -249,6 +257,9 @@ function validMessage(msg: ClientMsg): boolean {
       && (msg.match === undefined || ["single", "match"].includes(msg.match))
       && (msg.vsAI === undefined || typeof msg.vsAI === "boolean")
       && (msg.spectateOnly === undefined || typeof msg.spectateOnly === "boolean") && level(msg.aiLevel)
+      && (msg.tournament === undefined || !!msg.tournament && controlToken(msg.tournament.controlToken)
+        && (msg.tournament.seed === undefined || Number.isInteger(msg.tournament.seed) && msg.tournament.seed >= 0 && msg.tournament.seed <= 0xffffffff)
+        && (msg.match === undefined || msg.match === "single") && !msg.vsAI && !msg.opponent && !msg.spectateOnly)
       && (msg.opponent === undefined || !!msg.opponent && ["bot", "claude", "codex"].includes(msg.opponent.kind) && level(msg.opponent.level));
     case "join_room": return roomId(msg.roomId) && deck(msg.deck);
     case "spectate": return roomId(msg.roomId);
@@ -258,6 +269,8 @@ function validMessage(msg: ClientMsg): boolean {
       && msg.action.choose.every(id => typeof id === "string" && id.length <= 128);
     case "chat": return typeof msg.text === "string" && msg.text.length > 0 && msg.text.length <= 500;
     case "surrender": return true;
+    case "adjudicate": return controlToken(msg.controlToken) && [0, 1, null].includes(msg.winner)
+      && ["timeout", "agent-crash"].includes(msg.reason);
     default: return true;
   }
 }

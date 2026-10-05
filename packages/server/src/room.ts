@@ -4,7 +4,7 @@ import { spectatorEvents, spectatorState } from "./spectator.js";
 import { BotProgress, actionDiagnostic, diagnosticFingerprint } from "./ai/progress.js";
 import { generateLegalSelections } from "@ygosim/protocol";
 import { performance } from "node:perf_hooks";
-import { randomInt } from "node:crypto";
+import { createHash, randomInt, timingSafeEqual } from "node:crypto";
 
 /** Anything that can sit in a seat: a socket client (send) or a bot. */
 export interface Participant {
@@ -52,6 +52,9 @@ export class Room {
   private duel?: Duel;
   private wait?: PendingWait;
   private surrendered?: PlayerIdx;
+  private adjudicated?: { winner: PlayerIdx | null; reason: string };
+  private tournamentControl?: Buffer;
+  failure?: string;
   private closed = false;
   private cancelBot?: () => void;
   private siding?: Map<PlayerIdx, () => void>;
@@ -66,11 +69,13 @@ export class Room {
     opts: RoomOptions = {},
     id?: string,
     format: FormatId = "tcg",
-    match: MatchType = "single"
+    match: MatchType = "single",
+    tournament?: { controlToken: string }
   ) {
     this.id = id ?? `r${++roomCounter}${Math.random().toString(36).slice(2, 6)}`;
     this.format = format;
     this.match = match;
+    if (tournament) this.tournamentControl = createHash("sha256").update(tournament.controlToken).digest();
     this.opts = { turnTimeoutMs: 180_000, botDelayMs: 0, maxInvalid: 5, botRepeatLimit: 12, botDecisionLimit: 512, ...opts, seed: opts.seed ?? randomInt(2 ** 48 - 1) };
   }
 
@@ -137,6 +142,7 @@ export class Room {
       msg.score = [...this.score];
       msg.game = this.game;
     }
+    if (this.failure) msg.failure = this.failure;
     return msg;
   }
   broadcastRoom() { this.broadcast(this.roomMsg()); }
@@ -158,6 +164,10 @@ export class Room {
       w.invalid++;
       safeSend(p, { type: "error", message: `illegal action for prompt ${w.prompt.promptId}; choose ${describeBounds(w.prompt)} of the option ids` });
       if (w.invalid >= this.opts.maxInvalid) {
+        if (this.tournamentControl) {
+          this.forfeit(seat, "invalid-actions");
+          return;
+        }
         try { w.resolve(defaultAction(w.prompt)); } catch (error) { w.reject(error); }
       }
       return;
@@ -187,6 +197,20 @@ export class Room {
     this.surrendered = seat;
     this.cancelBot?.();
     // Unblock a waiting decision so the loop notices.
+    if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
+  }
+
+  adjudicate(controlToken: string, winner: PlayerIdx | null, reason: "timeout" | "agent-crash"): boolean {
+    if (!this.tournamentControl || this.status !== "dueling" || this.adjudicated) return false;
+    const candidate = createHash("sha256").update(controlToken).digest();
+    if (!timingSafeEqual(candidate, this.tournamentControl)) return false;
+    this.adjudicated = { winner, reason };
+    if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
+    return true;
+  }
+
+  private forfeit(player: PlayerIdx, reason: string): void {
+    this.adjudicated = { winner: (1 - player) as PlayerIdx, reason };
     if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
   }
 
@@ -232,6 +256,7 @@ export class Room {
       this.diagnostics.failure = message.startsWith("bot made no progress") ? "bot made no progress; start a new duel and report the room reference"
         : message.startsWith("no acceptable action") ? "no acceptable action within selection search budget"
         : message === "bot decision timed out" ? message : "unexpected duel failure";
+      this.failure = this.diagnostics.failure;
       console.error(`[room ${this.id}]`, this.diagnostics);
       this.broadcast({ type: "error", message: `duel aborted: ${this.diagnostics.failure}; room ${this.id}` });
       this.status = "done";
@@ -283,6 +308,10 @@ export class Room {
         yieldedAt = performance.now();
       }
       if (this.closed) return;
+      if (this.adjudicated) {
+        this.finish(this.adjudicated.winner, this.adjudicated.reason);
+        break;
+      }
       if (this.surrendered !== undefined) {
         this.finish((1 - this.surrendered) as PlayerIdx, "surrender");
         break;
@@ -346,7 +375,7 @@ export class Room {
         safeSend(seat, { type: "prompt", prompt, state });
         action = await answer;
       }
-      if (this.closed || this.surrendered !== undefined) return;
+      if (this.closed || this.surrendered !== undefined || this.adjudicated) return;
       const record = { player, prompt: structuredClone(prompt), action: structuredClone(action), rejected: false, error: undefined as string | undefined };
       this.diagnosticContext?.trace.push(record);
       if (this.diagnosticContext && this.diagnosticContext.trace.length > 32) this.diagnosticContext.trace.shift();
@@ -364,6 +393,7 @@ export class Room {
         // Engine rejected a structurally valid answer; tell humans and re-ask, fall back eventually.
         safeSend(seat, { type: "error", message: "engine rejected action; choose a valid response to the current prompt" });
         if (attempt >= 2) {
+          if (this.tournamentControl) throw new Error(`no acceptable action for prompt ${prompt.promptId}`);
           for (const choose of generateLegalSelections(prompt).candidates) {
             const opt = { promptId: prompt.promptId, choose };
             const fallback = { player, prompt: structuredClone(prompt), action: opt, rejected: false, error: undefined as string | undefined };
@@ -398,6 +428,11 @@ export class Room {
       };
       const timer = setTimeout(() => {
         const seat = this.seats[player];
+        if (this.tournamentControl) {
+          if (seat) safeSend(seat, { type: "error", message: "turn timer expired; tournament forfeit" });
+          this.forfeit(player, "decision-timeout");
+          return;
+        }
         if (seat) safeSend(seat, { type: "error", message: "turn timer expired; auto-picked a default action" });
         try { done(defaultAction(prompt)); } catch (error) { failed(error); }
       }, this.opts.turnTimeoutMs);

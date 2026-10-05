@@ -10,6 +10,8 @@ export const ROSTER: Player[] = [
   { id: "claude-opus", label: "Claude Opus 5.5", cli: "claude", model: "claude-opus-5-5", effort: "default" },
 ];
 
+const PI_LUNA_MAX: Player = { id: "pi-luna-max", label: "Pi GPT-6-Luna Max", cli: "pi", model: "openai-codex/gpt-6-luna", effort: "max" };
+
 export function getRosterPlayer(id: string): Player | undefined {
-  return ROSTER.find(p => p.id === id);
+  return ROSTER.find(p => p.id === id) ?? (id === PI_LUNA_MAX.id ? PI_LUNA_MAX : undefined);
 }

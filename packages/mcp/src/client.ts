@@ -73,7 +73,7 @@ export class GameClient {
       case "welcome": this.clientId = m.clientId; break;
       case "room":
         this.room = { roomId: m.roomId, players: m.players, status: m.status };
-        if (m.status === "done" && !this.ended) this.ended = { winner: null, reason: "room closed" };
+        if (m.status === "done" && !this.ended) this.ended = { winner: null, reason: m.failure ? "infrastructure-error" : "room closed" };
         if (m.status === "done") this.prompt = this.lastPrompt = null;
         break;
       case "events":
@@ -138,10 +138,10 @@ export class GameClient {
     await this.connect();
     this.resetDuel();
   }
-  async createRoom(deck: Deck, vsAI: boolean, aiLevel?: "easy" | "normal" | "hard"): Promise<RoomInfo> {
+  async createRoom(deck: Deck, vsAI: boolean, aiLevel?: "easy" | "normal" | "hard", tournament?: { controlToken: string; seed?: number }): Promise<RoomInfo> {
     await this.prepareRoom();
     const response = this.next((m) => m.type === "room", 10000);
-    this.send({ type: "create_room", vsAI, aiLevel, deck });
+    this.send({ type: "create_room", vsAI, aiLevel, deck, ...(tournament ? { tournament } : {}) });
     await response;
     return this.room!;
   }

@@ -176,5 +176,5 @@ export function getDecisions(tid: string, gid: string, pid: string, dir = tourna
 
 /** Compute the current leaderboard from all tournament files. */
 export function getLeaderboard(dir = tournamentDir()): Leaderboard {
-  return computeLeaderboard(readTournaments(dir));
+  return computeLeaderboard(readTournaments(dir).filter(tournament => tournament.scored === true));
 }

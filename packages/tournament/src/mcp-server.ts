@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { appendFileSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
@@ -7,10 +7,11 @@ import { StreamableHTTPServerTransport, type EventStore } from "@modelcontextpro
 import { isInitializeRequest, type JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { Session, type ToolDef, wsUrlFor } from "@ygosim/mcp/tools";
-import { fetchSampleDecks, resolveDeck } from "@ygosim/mcp/deck";
+import { fetchSampleDecks, parseYdk, resolveDeck } from "@ygosim/mcp/deck";
 import { GameClient } from "@ygosim/mcp/client";
 import type { ServerMsg } from "@ygosim/protocol";
-import type { Game } from "./types.js";
+import type { DeckPolicy, Game } from "./types.js";
+import { deckFingerprint, saveDeckArtifacts } from "./deck-artifacts.js";
 
 const BODY_LIMIT = 4 * 1024 * 1024;
 const ROOM_WAIT_MS = 60_000;
@@ -27,10 +28,14 @@ export interface TournamentMcpServerOptions {
   onChange?: (game: Game) => void | Promise<void>;
   /** Optional bind port for tests; defaults to an ephemeral localhost port. */
   port?: number;
+  deckPolicy?: DeckPolicy;
 }
 
 export interface TournamentMcpServer {
   urlFor(playerId: PlayerId): string;
+  authorizationFor(playerId: PlayerId): string;
+  registerRedactor(redact: (text: string) => string): void;
+  adjudicate(winner: string | null, reason: "timeout" | "agent-crash"): Promise<{ winner: 0 | 1 | null; reason: string }>;
   sessions: Map<PlayerId, Session>;
   close(): Promise<void>;
 }
@@ -59,7 +64,11 @@ interface DecisionRow {
   options: string[];
   choose: (string | number)[];
   reason: string;
-  ms: number;
+  ms?: number;
+  toolMs: number;
+  latencyKind: "response";
+  optionIds: string[];
+  selected: string[];
 }
 
 /**
@@ -130,10 +139,6 @@ function writeJsonLine(path: string, value: unknown): void {
   appendFileSync(path, `${JSON.stringify(value)}\n`);
 }
 
-function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }] };
-}
-
 function jsonRpcError(res: ServerResponse, status: number, message: string): void {
   if (res.headersSent) return;
   res.writeHead(status, { "content-type": "application/json; charset=utf-8" });
@@ -159,9 +164,9 @@ function copyArgs(args: unknown): Record<string, unknown> {
   return structuredClone(args) as Record<string, unknown>;
 }
 
-function deckShape() {
+function deckShape(customOnly = false) {
   return {
-    deck: z.string().min(1).optional().describe("Sample deck name returned by list_decks."),
+    deck: z.string().min(1).optional().describe(customOnly ? "Forbidden in custom-only games; submit ydk or main/extra passcodes instead." : "Sample deck name returned by list_decks."),
     ydk: z.string().min(1).optional().describe("Raw .ydk deck text."),
     main: z.array(z.number().int().positive()).optional().describe("Main-deck passcodes."),
     extra: z.array(z.number().int().positive()).optional().describe("Extra-deck passcodes."),
@@ -192,6 +197,9 @@ interface DecisionContext {
   promptId?: string;
   promptKind?: string;
   options?: string[];
+  optionIds?: string[];
+  selected?: string[];
+  ms?: number;
   reason: string;
   choose: (string | number)[];
 }
@@ -199,13 +207,24 @@ interface DecisionContext {
 /** Create one tournament game’s persistent, per-seat MCP bridge. */
 export async function createTournamentMcpServer(options: TournamentMcpServerOptions): Promise<TournamentMcpServer> {
   const { game, gameDir, onChange } = options;
+  const customOnly = options.deckPolicy === "custom-only";
   const gameServer = options.server.replace(/\/+$/, "");
   mkdirSync(gameDir, { recursive: true });
 
   const sessions = new Map<PlayerId, Session>();
   const playerIds = [...game.seats];
+  const credentials = new Map(playerIds.map(id => [id, randomBytes(32).toString("hex")]));
+  const controlToken = randomBytes(32).toString("hex");
+  const secrets = [...credentials.values(), controlToken];
+  const redactors = new Set<(text: string) => string>();
+  const redact = (text: string) => {
+    for (const secret of secrets) text = text.replaceAll(secret, "[REDACTED]");
+    for (const redactor of redactors) text = redactor(text);
+    return text;
+  };
+  const delivered = new Map<PlayerId, { promptId: string; at: number }>();
   for (const playerId of playerIds) {
-    sessions.set(playerId, new Session({ baseUrl: gameServer, name: `Tournament-${game.id}-${playerId}` }));
+    sessions.set(playerId, new Session({ baseUrl: gameServer, name: `Tournament-${game.id}-${playerId}`, tournament: { controlToken, seed: game.seed } }));
     if (!game.stats[playerId]) {
       game.stats[playerId] = { decisions: 0, avgDecisionMs: 0, invalid: 0, toolCalls: 0, resumes: 0, reasonsGiven: 0 };
     }
@@ -249,13 +268,23 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
 
   const logTool = (playerId: PlayerId, row: ToolCallRow) => {
     const path = toolPaths.get(playerId);
-    if (path) writeJsonLine(path, row);
+    if (path) appendFileSync(path, `${redact(JSON.stringify(row))}\n`);
   };
 
   const logDecision = (playerId: PlayerId, row: DecisionRow) => {
     const path = decisionPaths.get(playerId);
-    if (path) writeJsonLine(path, row);
+    if (path) appendFileSync(path, `${redact(JSON.stringify(row))}\n`);
   };
+
+  const recordLatency = (stats: GameStats, ms?: number) => {
+    stats.latencyKind = "response";
+    stats.timedDecisions ??= 0;
+    if (ms === undefined) return;
+    stats.timedDecisions++;
+    stats.avgDecisionMs += (ms - stats.avgDecisionMs) / stats.timedDecisions;
+  };
+
+  const preview = (text: string) => redact(text).slice(0, 200);
 
   const recordTool = async <T>(
     playerId: PlayerId,
@@ -268,9 +297,13 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     let ok = false;
     let result: T | undefined;
     let failure: unknown;
+    let shownPromptId: string | undefined;
     try {
       result = await run();
       ok = typeof result !== 'string' || !/^ERROR from server:/m.test(result);
+      if (["wait_for_turn", "get_state", "act"].includes(tool)) {
+        shownPromptId = sessions.get(playerId)?.client.prompt?.promptId;
+      }
       return result;
     } catch (error) {
       failure = error;
@@ -282,9 +315,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
       if (decision) {
         stats.decisions++;
         if (!ok) stats.invalid++;
-        stats.avgDecisionMs = stats.decisions === 1
-          ? ms
-          : ((stats.avgDecisionMs * (stats.decisions - 1)) + ms) / stats.decisions;
+        recordLatency(stats, decision.ms);
         if (decision.reason.trim()) stats.reasonsGiven++;
         logDecision(playerId, {
           t: started - logStart,
@@ -293,9 +324,13 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
           promptId: decision.promptId ?? "",
           promptKind: decision.promptKind ?? "",
           options: decision.options ?? [],
+          optionIds: decision.optionIds ?? [],
+          selected: decision.selected ?? [],
           choose: decision.choose,
           reason: decision.reason,
-          ms,
+          ms: decision.ms,
+          toolMs: ms,
+          latencyKind: "response",
         });
       }
       const row: ToolCallRow = {
@@ -306,9 +341,10 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
         ms,
         resultPreview: "",
       };
-      row.resultPreview = (failure ? errorMessage(failure) : String(result ?? '')).slice(0, 200);
+      row.resultPreview = preview(failure ? errorMessage(failure) : String(result ?? ''));
       logTool(playerId, row);
       await notifyChange();
+      if (shownPromptId && delivered.get(playerId)?.promptId !== shownPromptId) delivered.set(playerId, { promptId: shownPromptId, at: performance.now() });
     }
   };
 
@@ -323,11 +359,13 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     if (tool === "act") {
       stats.decisions++;
       stats.invalid++;
-      stats.avgDecisionMs = stats.avgDecisionMs * (stats.decisions - 1) / stats.decisions;
       if (typeof normalized.reason === 'string' && normalized.reason.trim()) stats.reasonsGiven++;
       const session = sessions.get(playerId);
       const prompt = session?.client.prompt;
       const state = session?.client.state;
+      const visible = delivered.get(playerId);
+      const ms = prompt && visible?.promptId === prompt.promptId ? Math.max(0, performance.now() - visible.at) : undefined;
+      recordLatency(stats, ms);
       logDecision(playerId, {
         t: started - logStart,
         turn: state?.turn ?? 0,
@@ -335,9 +373,13 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
         promptId: prompt?.promptId ?? "",
         promptKind: prompt?.kind ?? "",
         options: prompt?.options.map(option => option.label) ?? [],
+        optionIds: prompt?.options.map(option => option.id) ?? [],
+        selected: [],
         choose: Array.isArray(normalized.choose) ? normalized.choose as (string | number)[] : [],
         reason: typeof normalized.reason === "string" ? normalized.reason : "",
-        ms: 0,
+        ms,
+        toolMs: 0,
+        latencyKind: "response",
       });
     }
     logTool(playerId, {
@@ -346,7 +388,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
       args: normalized,
       ok: false,
       ms: 0,
-      resultPreview: reason.slice(0, 200),
+      resultPreview: preview(reason),
     });
     void notifyChange();
   };
@@ -365,10 +407,13 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     }
     let body: any = {};
     try { body = await response.json(); } catch { /* use HTTP status below */ }
-    if (!response.ok) throw new Error(`deck validation failed: HTTP ${response.status}`);
-    if (!body?.ok) {
-      const errors = Array.isArray(body?.errors) ? body.errors.join("; ") : "invalid deck";
-      throw new Error(`invalid deck: ${errors}`);
+    if (!response.ok || !body?.ok) {
+      const errors = Array.isArray(body?.errors) ? body.errors.join("\n")
+        : typeof body?.errors === "string" ? body.errors
+        : typeof body?.error === "string" ? body.error
+        : typeof body?.message === "string" ? body.message
+        : response.ok ? "invalid deck" : `HTTP ${response.status}`;
+      throw new Error(`invalid deck: ${errors}\nFix the reported counts, card passcodes or TCG restrictions and retry enter_match with the corrected deck.`);
     }
   };
 
@@ -425,24 +470,36 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
 
   const enterMatch = async (playerId: PlayerId, args: EnterMatchArgs): Promise<string> => {
     const session = sessions.get(playerId)!;
+    if (customOnly && args.deck !== undefined) throw new Error('Sample decks are forbidden: remove deck, use card_info to build a legal deck, and retry enter_match with ydk or main/extra/side passcodes');
     if (args.deck === undefined && args.ydk === undefined && args.main === undefined) {
-      throw new Error('Choose a deck source: deck, ydk, or main/extra');
+      throw new Error(customOnly
+        ? 'Custom-only tournaments require an independently built deck: use card_info to find real passcodes, then retry enter_match with main/extra (optional side) arrays or ydk text'
+        : 'Choose a deck source: deck, ydk, or main/extra');
     }
     const sampleName = args.deck === undefined ? undefined : (await fetchSampleDecks(session.http))
       .find(deck => deck.name.toLowerCase() === args.deck!.toLowerCase())?.name;
     if (args.deck !== undefined && !sampleName) throw new Error(`Unknown sample deck: ${args.deck}`);
     const deck = await resolveDeck({ sample: args.deck, ydk: args.ydk, main: args.main, extra: args.extra, side: args.side }, session.http);
     await fetchValidation(session, deck);
+    const fingerprint = deckFingerprint(deck);
+    if (customOnly) {
+      const samples = await fetchSampleDecks(session.http);
+      const copied = samples.some(sample => deckFingerprint(sample.deck ?? (sample.ydk ? parseYdk(sample.ydk) : { main: sample.main ?? [], extra: sample.extra ?? [] })) === fingerprint);
+      if (copied) throw new Error('Submitted main/extra cards exactly match a provided sample deck; independently redesign the main/extra list with card_info and retry enter_match. Changing only side cards is insufficient');
+    }
 
     const seat = game.seats.indexOf(playerId);
     if (seat < 0) throw new Error("player is not seated in this game");
     const record: DeckRecord = {
-      name: sampleName ?? (args.ydk !== undefined ? "Custom YDK" : "Custom deck"),
+      name: sampleName ?? `Custom deck ${fingerprint.slice(0, 12)}`,
       source: args.deck !== undefined ? "sample" : "custom",
-      reason: args.reason,
+      reason: redact(args.reason),
       main: [...deck.main],
       extra: [...deck.extra],
+      side: [...deck.side],
+      fingerprint,
     };
+    saveDeckArtifacts(gameDir, playerId, record);
 
     if (seat === 0) {
       // Publish the deck before the room request so a concurrently-started
@@ -470,6 +527,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
   };
 
   const registerMcp = (playerId: PlayerId, session: Session) => {
+    const textResult = (text: string) => ({ content: [{ type: "text" as const, text: redact(text) }] });
     const base = new Map(session.tools().map(tool => [tool.name, tool] as const));
     const mcp = new McpServer({ name: "ygosim-tournament", version: "0.1.0" });
     const schemas = new Map<string, z.ZodTypeAny>();
@@ -483,14 +541,16 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
       return tool.run(args);
     };
 
-    const listDecksShape = rememberSchema("list_decks", {});
-    mcp.registerTool("list_decks", {
-      description: "List sample deck names available on the ygosim game server.",
-      inputSchema: listDecksShape,
-    }, async (args: any) => textResult(await recordTool(playerId, "list_decks", copyArgs(args), async () => {
-      const decks = await fetchSampleDecks(session.http);
-      return decks.length ? decks.map(deck => deck.name).join("\n") : "(no sample decks)";
-    })));
+    if (!customOnly) {
+      const listDecksShape = rememberSchema("list_decks", {});
+      mcp.registerTool("list_decks", {
+        description: "List sample deck names available on the ygosim game server.",
+        inputSchema: listDecksShape,
+      }, async (args: any) => textResult(await recordTool(playerId, "list_decks", copyArgs(args), async () => {
+        const decks = await fetchSampleDecks(session.http);
+        return decks.length ? decks.map(deck => deck.name).join("\n") : "(no sample decks)";
+      })));
+    }
 
     const cardInfo = base.get("card_info")!;
     const cardInfoShape = rememberSchema("card_info", cardInfo.shape);
@@ -500,11 +560,11 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     }, async (args: any) => textResult(await recordTool(playerId, "card_info", copyArgs(args), () => run("card_info", args))));
 
     const enterShape = rememberSchema("enter_match", {
-      ...deckShape(),
+      ...deckShape(customOnly),
       reason: z.string().trim().min(1).describe("Private strategic reason for choosing this deck."),
     });
     mcp.registerTool("enter_match", {
-      description: "Choose and register your deck for this tournament match. The reason is private and is recorded for evaluation.",
+      description: customOnly ? "Register your independently built legal deck using ydk or main/extra/side. Supplied sample decks and exact copies are forbidden. Your full deck and private reason are saved for evaluation." : "Choose and register your deck for this tournament match. The reason is private and is recorded for evaluation.",
       inputSchema: enterShape,
     }, async (args: EnterMatchArgs) => textResult(await recordTool(playerId, "enter_match", copyArgs(args), () => enterMatch(playerId, args))));
 
@@ -534,6 +594,8 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
       const args = rawArgs as ActArgs;
       const prompt = session.client.prompt;
       const state = session.client.state;
+      const visible = delivered.get(playerId);
+      const ms = prompt && visible?.promptId === prompt.promptId ? Math.max(0, performance.now() - visible.at) : undefined;
       return textResult(await recordTool(
         playerId,
         "act",
@@ -548,6 +610,12 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
           promptId: prompt?.promptId,
           promptKind: prompt?.kind,
           options: prompt?.options.map(option => option.label),
+          optionIds: prompt?.options.map(option => option.id),
+          selected: Array.isArray(args.choose) ? args.choose.flatMap(choice => {
+            const id = typeof choice === "number" ? prompt?.options[choice - 1]?.id : choice;
+            return id !== undefined && prompt?.options.some(option => option.id === id) ? [id] : [];
+          }) : [],
+          ms,
           reason: args.reason,
           choose: Array.isArray(args.choose) ? args.choose : [],
         },
@@ -573,14 +641,20 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
   };
 
   const httpServer = createServer((req, res) => {
-    res.setHeader("access-control-allow-origin", "*");
+    res.setHeader("access-control-allow-origin", "http://127.0.0.1");
     res.setHeader("access-control-allow-methods", "GET, POST, DELETE, OPTIONS");
-    res.setHeader("access-control-allow-headers", "content-type, mcp-session-id, last-event-id");
+    res.setHeader("access-control-allow-headers", "content-type, authorization, mcp-session-id, last-event-id");
     if (req.method === "OPTIONS") { res.writeHead(204); res.end(); return; }
 
     const parts = pathParts(req);
     if (!parts || parts.gameId !== game.id || !sessions.has(parts.playerId)) {
       jsonRpcError(res, 404, "MCP endpoint not found");
+      return;
+    }
+    const expected = Buffer.from(`Bearer ${credentials.get(parts.playerId)!}`);
+    const actual = Buffer.from(typeof req.headers.authorization === "string" ? req.headers.authorization : "");
+    if (actual.length !== expected.length || !timingSafeEqual(actual, expected)) {
+      jsonRpcError(res, 403, "MCP player authorization required");
       return;
     }
 
@@ -653,6 +727,28 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     urlFor(playerId: PlayerId) {
       if (!sessions.has(playerId)) throw new Error(`player ${playerId} is not seated in game ${game.id}`);
       return `http://127.0.0.1:${boundPort}/mcp/${encodeURIComponent(game.id)}/${encodeURIComponent(playerId)}`;
+    },
+    authorizationFor(playerId: PlayerId) {
+      const credential = credentials.get(playerId);
+      if (!credential) throw new Error("player is not seated in this game");
+      return `Bearer ${credential}`;
+    },
+    registerRedactor(redactor) { redactors.add(redactor); },
+    async adjudicate(winner, reason) {
+      const client = sessions.get(playerIds[0]!)!.client;
+      if (client.ended) {
+        if (['room closed', 'infrastructure-error'].includes(client.ended.reason)) throw new Error('Game ended without a verified adjudication');
+        return client.ended;
+      }
+      if (!client.connected || !client.room) throw new Error("tournament room unavailable for adjudication");
+      const index = winner === null ? null : game.seats.indexOf(winner);
+      if (index !== null && index !== 0 && index !== 1) throw new Error("invalid tournament winner");
+      const terminal = client.next(message => message.type === "events" && message.events.some(event => event.t === "win") || message.type === "room" && message.status === "done", 5000);
+      client.send({ type: "adjudicate", controlToken, winner: index, reason });
+      await terminal;
+      const confirmed = sessions.get(playerIds[0]!)?.client.ended;
+      if (!confirmed || confirmed.reason === "room closed" || confirmed.reason === "infrastructure-error") throw new Error("tournament adjudication was not confirmed");
+      return confirmed;
     },
     sessions,
     async close() {

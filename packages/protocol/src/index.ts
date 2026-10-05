@@ -167,17 +167,18 @@ export type DuelEvent =
 // ---- WebSocket messages ----
 export type ClientMsg =
   | { type: "hello"; name: string; kind: "human" | "agent" }
-  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType; opponent?: OpponentSpec; spectateOnly?: boolean; opponentDeck?: Deck }
+  | { type: "create_room"; vsAI?: boolean; aiLevel?: "easy" | "normal" | "hard"; deck: Deck; format?: FormatId; match?: MatchType; opponent?: OpponentSpec; spectateOnly?: boolean; opponentDeck?: Deck; tournament?: { controlToken: string; seed?: number } }
   | { type: "join_room"; roomId: string; deck: Deck }
   | { type: "action"; action: Action }
   | { type: "chat"; text: string }
   | { type: "surrender" }
+  | { type: "adjudicate"; controlToken: string; winner: PlayerIdx | null; reason: "timeout" | "agent-crash" }
   | { type: "side_deck"; deck: Deck }    // between games of a match
   | { type: "spectate"; roomId: string };
 
 export type ServerMsg =
   | { type: "welcome"; clientId: string }
-  | { type: "room"; roomId: string; players: string[]; status: "waiting" | "dueling" | "siding" | "done"; format?: FormatId; match?: MatchType; score?: [number, number]; game?: number }
+  | { type: "room"; roomId: string; players: string[]; status: "waiting" | "dueling" | "siding" | "done"; format?: FormatId; match?: MatchType; score?: [number, number]; game?: number; failure?: string }
   | { type: "events"; events: DuelEvent[]; state: DuelState }
   | { type: "prompt"; prompt: Prompt; state: DuelState }
   | { type: "chat"; from: string; text: string }
