@@ -49,6 +49,22 @@ describe('validation launch gates', () => {
     t.scored = true; atomicWrite(join(root, t.id, 'tournament.json'), t);
     expect(() => requireValidation(t.id, players, audit)).toThrow();
   });
+  it('matches code mode settings and treats legacy omitted settings as disabled', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tournament-code-mode-gate-')); roots.push(root);
+    vi.stubEnv('YGOSIM_TOURNAMENT_DIR', root);
+    const t = fixture(); t.validation = validationResult(t);
+    const file = join(root, t.id, 'tournament.json');
+    atomicWrite(file, t);
+    expect(() => requireValidation(t.id, [{ ...players[0], codeMode: false }], audit)).not.toThrow();
+    expect(() => requireValidation(t.id, [{ ...players[0], codeMode: true }], audit)).toThrow('passing unscored');
+    t.players = [{ ...players[0], codeMode: true }, players[1]];
+    atomicWrite(file, t);
+    expect(() => requireValidation(t.id, t.players, audit)).not.toThrow();
+    expect(() => requireValidation(t.id, players, audit)).toThrow('passing unscored');
+    t.players = [{ ...players[0], codeMode: false }, players[1]];
+    atomicWrite(file, t);
+    expect(() => requireValidation(t.id, players, audit)).not.toThrow();
+  });
   it('refuses validation for a reported fallback model and for infrastructure errors', () => {
     const t = fixture();
     t.games[0].models = { [players[1].id]: 'different-model' };

@@ -2,7 +2,7 @@ import type { Player } from "./types.js";
 
 export const ROSTER: Player[] = [
   { id: "codex-sol", label: "Codex 6.1 Sol", cli: "codex", model: "gpt-6.1-sol", effort: "medium" },
-  { id: "codex-luna-max", label: "Codex 6 Luna Max", cli: "codex", model: "gpt-6-luna", effort: "max" },
+  { id: "codex-luna-max", label: "Codex 6 Luna Max", cli: "codex", model: "gpt-6-luna", effort: "max", codeMode: true },
   { id: "pi-grok-46", label: "Grok 4.6", cli: "pi", model: "xai/grok-4.6", effort: "high" },
   { id: "pi-grok-47", label: "Grok 4.7", cli: "pi", model: "xai/grok-4.7", effort: "high" },
   { id: "pi-deepseek-flash", label: "DeepSeek Flash v4.1", cli: "pi", model: "fireworks/accounts/fireworks/models/deepseek-v4p1-flash", effort: "high" },

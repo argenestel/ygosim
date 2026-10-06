@@ -88,7 +88,8 @@ export function requireValidation(id: string | undefined, players: Player[], aud
     || validation.audit.decisionTimeoutMs !== audit.decisionTimeoutMs || validation.audit.maxInvalid !== audit.maxInvalid
     || (validation.deckPolicy ?? validation.audit.deckPolicy ?? 'choice') !== (audit.deckPolicy ?? 'choice')
     || players.some(player => !validation.validation?.checkedPlayers.includes(player.id)
-      || !validation.players.some(prior => prior.id === player.id && prior.cli === player.cli && prior.model === player.model && prior.effort === player.effort)
+      || !validation.players.some(prior => prior.id === player.id && prior.cli === player.cli && prior.model === player.model && prior.effort === player.effort
+        && (prior.codeMode ?? false) === (player.codeMode ?? false))
       || validation.audit?.cliVersions[player.cli] !== audit.cliVersions[player.cli])) {
     throw new Error('A passing unscored --validate run with the same code, server, CLIs and roster is required; supply --validated-by <id>');
   }

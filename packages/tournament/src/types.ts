@@ -13,6 +13,8 @@ export interface Player {
   cli: Cli;
   model: string;
   effort?: string;
+  /** Opt in to Codex code mode for models that require it to reach MCP tools. */
+  codeMode?: boolean;
 }
 
 export interface DeckInfo {

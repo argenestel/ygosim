@@ -17,10 +17,13 @@ export function agentCommand(player: Player, url: string, workdir: string, promp
   const env: NodeJS.ProcessEnv = Object.fromEntries(keys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
   if (authorization) env.YGOSIM_MCP_TOKEN = authorization.replace(/^Bearer /, '');
   if (player.cli === 'codex') {
+    if (player.codeMode) prompt += '\nThe ygosim game tools (card_info, enter_match, wait_for_turn, act, get_state, surrender) are available as MCP tools through the code-execution tool; use only those, no network/file access attempts.';
     const settings = ['-c', `model_reasoning_effort=${JSON.stringify(player.effort ?? 'medium')}`, '-c', 'developer_instructions=""',
       '-c', `mcp_servers.ygosim.url=${JSON.stringify(url)}`, '-c', 'mcp_servers.ygosim.tool_timeout_sec=660',
       '-c', 'mcp_servers.ygosim.bearer_token_env_var="YGOSIM_MCP_TOKEN"', '-c', 'web_search="disabled"',
-      ...['shell_tool', 'code_mode_host', 'code_mode', 'apps', 'browser_use', 'browser_use_external', 'computer_use', 'hooks', 'plugins', 'skill_search'].flatMap(feature => ['--disable', feature])];
+      '-c', 'mcp_servers.ygosim.default_tools_approval_mode="approve"',
+      ...(player.codeMode ? ['--enable', 'code_mode', '--enable', 'code_mode_host'] : []),
+      ...['shell_tool', ...(player.codeMode ? [] : ['code_mode_host', 'code_mode']), 'apps', 'browser_use', 'browser_use_external', 'computer_use', 'hooks', 'plugins', 'skill_search'].flatMap(feature => ['--disable', feature])];
     const args = resume && sessionId
       ? ['exec', 'resume', sessionId, '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '-c', 'sandbox_mode="read-only"', '-m', player.model, ...settings, prompt]
       : ['exec', '--json', '--skip-git-repo-check', '--ignore-user-config', '--ignore-rules', '--sandbox', 'read-only', '-m', player.model, ...settings, prompt];

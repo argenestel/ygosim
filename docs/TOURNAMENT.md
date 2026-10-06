@@ -35,7 +35,7 @@ remain viewable by tournament ID but do not silently enter the new rankings.
 
 Scored CLI launches require `--validated-by <id>` from a passing validation with
 the same source hash, server URL and decision limits, Node version, CLI versions,
-models, and efforts.
+models, efforts, and per-player code mode settings (an omitted setting means disabled).
 Unexpected reported fallback models are rejected; dated aliases in the requested
 model family are recorded without being mistaken for another family.
 Changing those inputs requires new validation; resuming across code revisions is
@@ -62,10 +62,13 @@ Agents receive distinct ephemeral MCP bearer credentials. Their processes run
 in bubblewrap with only their own writable workspace, runtime dependencies, and
 a private credential home; personal host files, peer workspaces, and inherited user
 settings are unavailable. Pi and Claude expose only tournament MCP tools, while
-Codex shell, code execution, browser, web search, hooks, and plugins are disabled.
+Codex shell, browser, web search, hooks, and plugins are disabled. Code execution
+is disabled except for entrants that explicitly opt in to code mode (see roster).
 Provider and local MCP networking remain available: this is filesystem isolation,
 not a network sandbox. Private homes and MCP configuration are removed after the
 game, and known runtime credentials are redacted from stored process output.
+The non-interactive Codex runner auto-approves tools only on its per-game ygosim
+MCP endpoint, which exposes the tournament tools with a per-agent credential.
 
 Tournament rooms forfeit expired human decisions or excessive illegal wire
 actions instead of silently auto-playing. Wall timeouts are authenticated draws;
@@ -86,6 +89,14 @@ existing timeout/default-action behavior.
 | pi-deepseek-flash | DeepSeek Flash v4.1 | pi | fireworks/accounts/fireworks/models/deepseek-v4p1-flash | high |
 | pi-glm-flash | GLM 5.3 Flash | pi | fireworks/accounts/fireworks/models/glm-5p3-flash | high |
 | claude-opus | Claude Opus 5.5 | claude | claude-opus-5-5 | default |
+
+`codex-luna-max` alone sets `codeMode: true`: this model needs Codex code mode
+to reach the ygosim MCP tools. Shell, web search, and browser tools stay disabled,
+and the Codex sandbox stays read-only, but code mode can execute code inside the
+filesystem sandbox. This is a weaker isolation guarantee for that entrant;
+the prompt instructs it to use only the game MCP tools and avoid network/file
+access attempts. Other Codex entrants keep code mode disabled, including stored
+players without the field.
 
 `pi-luna-max` is an opt-in entrant: Pi, `openai-codex/gpt-6-luna`, thinking `max`.
 It is not added to the default seven-player schedule. Pi's session metadata is

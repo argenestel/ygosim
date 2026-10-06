@@ -10,6 +10,45 @@ vi.mock('../src/sandbox.js', () => ({ sandboxCommand: async (command: any) => ({
 import { agentCommand, runAgent } from '../src/agent-process.js';
 import { getRosterPlayer, ROSTER } from '../src/roster.js';
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); spawnMock.mockReset(); });
+it('opts only Luna into code mode while preserving other Codex restrictions on launch and resume', () => {
+  const luna = getRosterPlayer('codex-luna-max')!;
+  expect(ROSTER.filter(player => player.codeMode).map(player => player.id)).toEqual([luna.id]);
+  for (const player of ROSTER.filter(player => player.cli === 'codex')) {
+    for (const resume of [false, true]) {
+      const { args } = agentCommand(player, 'http://localhost/mcp', '/fixture', 'play', 'thread', resume);
+      const disabled = args.flatMap((arg, index) => arg === '--disable' ? [args[index + 1]] : []);
+      const enabled = args.flatMap((arg, index) => arg === '--enable' ? [args[index + 1]] : []);
+      for (const feature of ['code_mode_host', 'code_mode']) {
+        expect(disabled.includes(feature)).toBe(player.id !== luna.id);
+        expect(enabled.includes(feature)).toBe(player.id === luna.id);
+      }
+      for (const feature of ['shell_tool', 'apps', 'browser_use', 'browser_use_external', 'computer_use', 'hooks', 'plugins', 'skill_search']) {
+        expect(disabled).toContain(feature);
+      }
+      expect(args).toContain('web_search="disabled"');
+      expect(args).toContain('mcp_servers.ygosim.default_tools_approval_mode="approve"');
+      expect(args).toContain(resume ? 'sandbox_mode="read-only"' : 'read-only');
+      expect(args).toContain('--ignore-user-config');
+      expect(args).toContain('--ignore-rules');
+    }
+  }
+  const { codeMode: _codeMode, ...legacyLuna } = luna;
+  const legacy = agentCommand(legacyLuna, 'url', '/fixture', 'play', '', false);
+  expect(legacy.args).toContain('code_mode_host');
+  expect(legacy.args).toContain('code_mode');
+  expect(legacy.args.at(-1)).toBe('play');
+});
+
+it('adds code-execution MCP guidance only to opted-in Codex prompts, including resumes', () => {
+  const sentence = 'The ygosim game tools (card_info, enter_match, wait_for_turn, act, get_state, surrender) are available as MCP tools through the code-execution tool; use only those, no network/file access attempts.';
+  for (const player of ROSTER) {
+    for (const resume of [false, true]) {
+      const command = agentCommand(player, 'url', '/fixture', 'play', 'thread', resume);
+      expect(command.args.at(-1)).toBe(player.codeMode ? `play\n${sentence}` : 'play');
+    }
+  }
+});
+
 it('captures split thread events and stops after exactly six resumes', async () => {
   const dir = await mkdtemp(join(tmpdir(), 'tournament-agent-'));
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
