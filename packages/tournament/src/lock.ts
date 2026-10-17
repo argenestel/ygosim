@@ -1,8 +1,20 @@
 import { randomUUID } from 'node:crypto';
+import { readdirSync } from 'node:fs';
 import { mkdir, readdir, rename, rm, rmdir, unlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 class LockBusy extends Error {}
+
+export function isLockActive(path: string): boolean {
+  try {
+    const entries = readdirSync(path);
+    const owner = entries.length === 1 ? /^owner-(\d+)-[a-zA-Z0-9-]+$/.exec(entries[0]!) : null;
+    const pid = Number(owner?.[1]);
+    if (!Number.isSafeInteger(pid) || pid <= 0 || pid > 2147483647) return false;
+    try { process.kill(pid, 0); return true; }
+    catch (error) { return (error as NodeJS.ErrnoException).code === 'EPERM'; }
+  } catch { return false; }
+}
 
 /** Publish a populated directory atomically; immutable owner names protect stale recovery. */
 async function claim(path: string): Promise<() => Promise<void>> {

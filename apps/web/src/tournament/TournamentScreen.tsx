@@ -1,7 +1,7 @@
 import { Fragment, memo, useEffect, useMemo, useState } from "react";
 import { getCard, onCardCache, peekCard } from "../api";
 import { CardThumb, Modal } from "../ui/kit";
-import { chosenText, getLeaderboard, getRawLog, getTournament, listTournaments, organizerToken, pct, reasonText, relTime, secs, setOrganizerToken, tailActivity, tailDecisions,
+import { chosenText, getLeaderboard, getRawLog, getTournament, listTournaments, liveness, organizerToken, pct, reasonText, relTime, secs, setOrganizerToken, tailActivity, tailDecisions,
   type Activity, type Decision, type Leaderboard, type Standing, type TDeck, type TGame, type TSummary, type Tournament } from "./api";
 import { BrandMark, HostMark, identifyBrand, type BrandInfo } from "./brandMarks";
 import { usePoll, useFollow, useTail } from "./hooks";
@@ -48,7 +48,7 @@ export function TournamentScreen({ onReplay, selected, onSelect }: { onReplay: (
         <button className={`ghost${hasKey ? " on" : ""}`} onClick={() => setKeyOpen(true)} title="Organizer token unlocks raw agent logs">{hasKey ? "🔓 Logs unlocked" : "🔒 Logs access"}</button>
         <select value={sel} onChange={(e) => choose(e.target.value)} aria-label="Tournament">
           <option value="board">All-time leaderboard</option>
-          {list?.map((t) => <option key={t.id} value={t.id}>{t.status === "running" ? "● " : ""}{t.name} · {t.done}/{t.total}{t.status === "running" ? " · live" : ""}</option>)}
+          {list?.map((t) => <option key={t.id} value={t.id}>{liveness(t) === "live" ? "● " : ""}{t.name} · {t.done}/{t.total}{liveness(t) === "live" ? " · live" : liveness(t) === "paused" ? " · paused" : ""}</option>)}
         </select>
       </div>
       {listErr && !list && <p className="err">Tournament API unavailable: {listErr}</p>}
@@ -70,7 +70,7 @@ function KeyModal({ onClose }: { onClose: (changed: boolean) => void }) {
 }
 
 function AllTime({ list, onOpen }: { list: TSummary[]; onOpen: (id: string) => void }) {
-  const [lb, err] = usePoll<Leaderboard>(getLeaderboard, [], () => list.some((t) => t.status === "running") && 8000);
+  const [lb, err] = usePoll<Leaderboard>(getLeaderboard, [], () => list.some((t) => liveness(t) === "live") && 8000);
   return (
     <>
       <section className="t-section">
@@ -81,7 +81,7 @@ function AllTime({ list, onOpen }: { list: TSummary[]; onOpen: (id: string) => v
         {lb && lb.players.length === 0 && (
           <div className="t-empty">
             <span className="eyebrow">No scored games yet</span>
-            <p>Validation runs never enter the leaderboard. Pass a validation, then launch a scored tournament with <code>--validated-by &lt;id&gt;</code>{list.some((t) => t.status === "running") ? " — a tournament is live right now, pick it above to watch." : "."}</p>
+            <p>Validation runs never enter the leaderboard. Pass a validation, then launch a scored tournament with <code>--validated-by &lt;id&gt;</code>{list.some((t) => liveness(t) === "live") ? " — a tournament is live right now, pick it above to watch." : "."}</p>
           </div>
         )}
       </section>
@@ -113,7 +113,7 @@ function AllTime({ list, onOpen }: { list: TSummary[]; onOpen: (id: string) => v
           {list.map((t) => (
             <button key={t.id} className="t-list-item" onClick={() => onOpen(t.id)}>
               <b>{t.name}</b>
-              <span className={`chip${t.status === "running" ? " ok" : ""}`}>{t.status === "running" ? "Live" : "Finished"}</span>
+              <span className={`chip${liveness(t) === "live" ? " ok" : ""}`}>{liveness(t) === "live" ? "● Live" : liveness(t) === "paused" ? "Paused" : "Finished"}</span>
               <span className="muted">{new Date(t.createdAt).toLocaleString()} · {t.players.length} agents · {t.done}/{t.total} games</span>
             </button>
           ))}
@@ -202,7 +202,7 @@ function TournamentArena({ t, done, live }: { t: Tournament; done: number; live:
         <div className="t-arena-core">
           <span className="t-core-kicker">TOURNAMENT SCORE</span>
           <strong>{total ? `${done}/${total}` : "—"}</strong>
-          <span>{state === "scoring" ? `${live} live ${live === 1 ? "match" : "matches"}` : scoreStateLabel(state)}</span>
+          <span>{liveness(t) === "paused" ? "Paused" : state === "scoring" ? `${live} live ${live === 1 ? "match" : "matches"}` : scoreStateLabel(state)}</span>
         </div>
         <div className="t-bubble-grid">
           {t.players.map((p) => <PlayerBubble key={p.id} p={p} t={t} rank={ranks.get(p.id)} state={state} />)}
@@ -220,7 +220,7 @@ function TournamentArena({ t, done, live }: { t: Tournament; done: number; live:
 function PlayerBubble({ p, t, rank, state }: { p: Tournament["players"][number]; t: Tournament; rank?: number; state: TournamentScoreState }) {
   const brand = playerBrand(p);
   const games = t.games.filter((g) => g.seats.includes(p.id));
-  const live = games.some((g) => g.status === "running");
+  const live = liveness(t) === "live" && games.some((g) => g.status === "running");
   const recorded = games.some((g) => g.status === "done");
   const standing = t.standings.find((s) => s.id === p.id);
   const validated = state === "validation" && !!t.validation?.checkedPlayers.includes(p.id);
@@ -255,7 +255,7 @@ function PlayerBubble({ p, t, rank, state }: { p: Tournament["players"][number];
 }
 
 function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tournament, g: TGame) => void }) {
-  const [t, err] = usePoll(() => getTournament(tid), [tid], (x) => x?.status === "running" && LIVE_POLL_MS);
+  const [t, err] = usePoll(() => getTournament(tid), [tid], (x) => (x ? liveness(x) === "live" : false) && LIVE_POLL_MS);
   const [openId, setOpenId] = useState<string | null>(null);
   const players = t?.players;
   const label = useMemo(() => (pid: string) => players?.find((p) => p.id === pid)?.label ?? pid, [players]);
@@ -264,14 +264,14 @@ function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tourname
   if (!t) return <div className="spinner" />;
   const done = t.games.filter((g) => g.status === "done").length;
   const stages = [...new Set(t.games.map((g) => g.stage))];
-  const live = t.games.filter((g) => g.status === "running");
+  const live = liveness(t) === "live" ? t.games.filter((g) => g.status === "running") : [];
 
   return (
     <>
       <TournamentArena t={t} done={done} live={live.length} />
       <div className="row t-meta">
-        <span className={`chip${t.status === "running" ? " ok" : ""}`}>{t.status === "running" ? "● Live" : "Finished"}</span>
-        <span className="muted">{t.format} · {done}/{t.games.length} games · started {new Date(t.createdAt).toLocaleString()}</span>
+        <span className={`chip${liveness(t) === "live" ? " ok" : ""}`}>{liveness(t) === "live" ? "● Live" : liveness(t) === "paused" ? "Paused" : "Finished"}</span>
+        <span className="muted">{t.format} · {done}/{t.games.length} games · started {new Date(t.createdAt).toLocaleString()}{liveness(t) === "paused" ? ` · no runner attached${t.pausedAt ? ` since ${new Date(t.pausedAt).toLocaleString()}` : ""}; resume with --resume ${t.id}` : ""}</span>
       </div>
       <div className="t-roster">
         {t.players.map((p) => <span key={p.id} className="chip" title={p.model}>{p.label} <small>{CLI_TAG[p.cli] ?? p.cli}{p.effort ? ` · ${p.effort}` : ""}</small></span>)}
@@ -334,7 +334,8 @@ function liveLine(g: TGame, label: (p: string) => string): string | undefined {
 }
 
 const GameCard = memo(function GameCard({ g, t, label, onOpen }: { g: TGame; t: Tournament; label: (p: string) => string; onOpen: () => void }) {
-  const running = g.status === "running";
+  const running = g.status === "running" && liveness(t) === "live";
+  const stalled = g.status === "running" && !running;
   const now = useNow(running);
   const cap = (t.audit?.maxMinutes ?? 0) * 60_000;
   const elapsed = running && g.startedAt ? Math.max(0, now - Date.parse(g.startedAt)) : 0;
@@ -344,7 +345,7 @@ const GameCard = memo(function GameCard({ g, t, label, onOpen }: { g: TGame; t: 
     <button className={`t-game ${g.status}`} onClick={onOpen}>
       <div className="t-game-head">
         <span className="muted small">{g.stage === "final" ? "Final" : `R${g.round}`}{running && g.live ? ` · T${g.live.turn}` : ""}</span>
-        <span className={`chip${running ? " ok" : g.status === "error" ? " bad" : ""}`}>{running ? "● live" : g.status}</span>
+        <span className={`chip${running ? " ok" : g.status === "error" || stalled ? " bad" : ""}`}>{running ? "● live" : stalled ? "stalled" : g.status}</span>
       </div>
       {g.seats.map((p, i) => {
         const lp = lpOf(p, i), turn = running && g.live && g.live.turnPlayer === i;
@@ -361,6 +362,7 @@ const GameCard = memo(function GameCard({ g, t, label, onOpen }: { g: TGame; t: 
       <div className="muted small">
         {g.status === "done" ? `${g.winner === null ? "Draw" : `${label(g.winner)} won`} · ${reasonText(g.reason)}${g.turns ? ` · ${g.turns} turns` : ""}${dur ? ` · ${secs(dur)}` : ""}`
           : running ? (liveLine(g, label) ?? (Object.keys(g.decks).length < 2 ? "Agents are building decks" : "Duel starting")) + (elapsed ? ` · ${secs(elapsed)}` : "")
+          : stalled ? "Runner stopped mid-game · resume replays it from the recorded seed"
           : g.error ?? ""}
       </div>
     </button>
@@ -379,7 +381,7 @@ type View = "reasoning" | "activity" | "raw";
 
 function GameDetail({ t, g, label, onClose, onReplay }: { t: Tournament; g: TGame; label: (p: string) => string; onClose: () => void; onReplay: () => void }) {
   const tid = t.id;
-  const live = g.status === "running";
+  const live = g.status === "running" && liveness(t) === "live";
   const [seat, setSeat] = useState<string>("both");
   const [view, setView] = useState<View>("reasoning");
   const [a, b] = g.seats;

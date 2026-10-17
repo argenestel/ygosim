@@ -65,6 +65,8 @@ export interface Tournament {
   name: string;
   createdAt: string;
   status: TournamentStatus;
+  paused?: boolean;
+  pausedAt?: string;
   format: "round-robin+final" | "best-of-three";
   players: Player[];
   games: Game[];

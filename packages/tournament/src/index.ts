@@ -192,6 +192,7 @@ async function playGame(tournament: Tournament, game: Game, dir: string, options
       if (finalState) game.lp = Object.fromEntries(game.seats.map((id, seat) => [id, finalState.lp[seat]]));
     }
     await bridge?.close();
+    if (signal.aborted && game.status === 'running') game.status = 'pending';
     await persist();
   }
 }
@@ -227,6 +228,7 @@ export async function runTournament(options: RunnerOptions, signal: AbortSignal 
     if (options.resume) for (const game of tournament.games) if (game.status !== 'done') game.status = 'pending';
     if (options.noFinal) tournament.games = tournament.games.filter(game => game.stage !== 'final' || game.status === 'done');
     tournament.status = 'running';
+    delete tournament.paused; delete tournament.pausedAt;
     let writes = Promise.resolve();
     const persist = () => {
       writes = writes.catch(() => {}).then(async () => {
@@ -285,6 +287,9 @@ export async function runTournament(options: RunnerOptions, signal: AbortSignal 
     }
     await Promise.all(active.values());
     tournament.status = tournament.games.every(g => g.status === 'done') ? 'done' : 'running';
+    if (!tournament.games.some(g => g.status === 'running') && tournament.status !== 'done') {
+      tournament.paused = true; tournament.pausedAt = new Date().toISOString();
+    }
     if (tournament.scored === false) tournament.validation = validationResult(tournament);
     await persist();
     return tournament;

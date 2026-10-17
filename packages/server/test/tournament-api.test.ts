@@ -1,4 +1,6 @@
-import { mkdtempSync, mkdirSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -78,6 +80,43 @@ describe("tournament API", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
+  it("derives activity from a live lock owner and ignores stale locks", async () => {
+    const tournament = fixture(); tournament.status = "running"; tournament.paused = true;
+    tournament.pausedAt = "2026-01-01T00:02:00.000Z";
+    const { root, dir, app } = seed({ tournament });
+    const lock = join(dir, tournament.id, ".runner-lock");
+    const owner = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"]);
+    await once(owner, "spawn");
+    const exited = once(owner, "exit");
+    const check = async (active: boolean) => {
+      const summary = (await (await app.request("/api/tournaments")).json())[0];
+      const detail = await (await app.request("/api/tournaments/cup-1")).json();
+      expect(summary).toMatchObject({ status: "running", paused: true, active });
+      expect(detail).toMatchObject({ paused: true, pausedAt: tournament.pausedAt, active });
+      for (const result of [summary, detail]) {
+        expect(result).not.toHaveProperty("pid");
+        expect(JSON.stringify(result)).not.toContain(root);
+        expect(JSON.stringify(result)).not.toContain("owner-");
+      }
+    };
+    try {
+      await check(false);
+      mkdirSync(lock);
+      await check(false);
+      const ownerPath = join(lock, `owner-${owner.pid}-fixture`);
+      writeFileSync(ownerPath, "");
+      await check(true);
+      owner.kill("SIGTERM"); await exited;
+      await check(false);
+      unlinkSync(ownerPath);
+      writeFileSync(join(lock, "invalid-owner"), "");
+      await check(false);
+    } finally {
+      if (owner.exitCode === null && owner.signalCode === null) { owner.kill("SIGTERM"); await exited; }
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("exposes only the latest board summary from a bounded replay tail", async () => {
     const tournament = fixture();
     tournament.games[0]!.status = "running";
@@ -112,6 +151,7 @@ describe("tournament API", () => {
     expect(list.status).toBe(200);
     expect(await list.json()).toEqual([{
       id: "cup-1", name: "Cup 1", createdAt: "2026-01-01T00:00:00.000Z", status: "done",
+      active: false, paused: false,
       players: tournament.players, done: 1, total: 1,
     }]);
 

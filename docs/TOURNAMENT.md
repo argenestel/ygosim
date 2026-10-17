@@ -208,6 +208,7 @@ data/leaderboard.json                                     aggregate over all tou
 ```ts
 interface Tournament {
   id: string; name: string; createdAt: string; status: "running" | "done";
+  paused?: boolean; pausedAt?: string;
   format: "round-robin+final";
   players: { id: string; label: string; cli: "codex" | "pi" | "claude"; model: string; effort?: string }[];
   games: Game[];
@@ -227,8 +228,8 @@ interface Game {
 
 ## HTTP API (game server)
 
-* `GET /api/tournaments` → `{ id, name, createdAt, status, players, done, total }[]`
-* `GET /api/tournaments/:tid` → `Tournament & { standings: Standing[] }`; running games
+* `GET /api/tournaments` → `{ id, name, createdAt, status, paused, active, players, done, total }[]`
+* `GET /api/tournaments/:tid` → `Tournament & { active: boolean, standings: Standing[] }`; running games
   may include `live: { turn, phase, turnPlayer, lp: [number, number], at: string }`
   from the latest available replay state (no hands or decks). `at` is ISO time;
   unavailable state is omitted. The wall-time cap remains public in `audit.maxMinutes`.
@@ -241,6 +242,16 @@ interface Game {
 * `GET /api/tournaments/:tid/report.md` → Markdown summary
 * `GET /api/tournaments/:tid/events` → SSE change notifications
 * Replay accepts `?from=<frame>` and returns `X-Frame-Count`.
+
+`active` means a runner currently owns the tournament lock with a live process;
+missing, empty, malformed, or dead-owner locks are inactive, even for legacy records
+whose status is `running`. On normal exit, a game limit, infrastructure failure,
+or SIGINT/SIGTERM, the runner settles interrupted games back to `pending` and
+records `done` only when every game is done. Otherwise it keeps `running` for
+resume, sets `paused: true`, and records `pausedAt` as an ISO timestamp. Resume
+clears both pause fields and retries unfinished or errored games. A forced kill
+cannot persist pause metadata; `active` still detects its dead owner. Summary
+rows always include a boolean `paused` (false when absent in storage).
 
 Live decklists, deck-choice reasons, game reasons/errors, decisions, and activity
 are public by default, including in Markdown reports. Set

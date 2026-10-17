@@ -20,9 +20,11 @@ export interface Standing {
   crashes: number; decks: { name: string; played: number; wins: number }[];
 }
 export interface DeckStat { name: string; source: "sample" | "custom"; picks: number; wins: number; pickedBy: Record<string, number> }
-export interface TSummary { id: string; name: string; createdAt: string; status: "running" | "done"; players: TPlayer[]; done: number; total: number }
+export interface TSummary { id: string; name: string; createdAt: string; status: "running" | "done"; players: TPlayer[]; done: number; total: number; paused?: boolean; active?: boolean }
 export interface Tournament {
   id: string; name: string; createdAt: string; status: "running" | "done"; format: string; players: TPlayer[]; games: TGame[]; standings: Standing[];
+  /** A runner currently owns this tournament (derived from its lock). Missing on older servers. */
+  active?: boolean; paused?: boolean; pausedAt?: string;
   /** Explicit provenance from the runner. Undefined means legacy data with no scoring claim. */
   scored?: boolean;
   deckPolicy?: "choice" | "custom-only";
@@ -85,6 +87,10 @@ export const REASONS: Record<string, string> = {
   "decision-timeout": "decision timeout", "invalid-actions": "illegal actions", "agent-crash": "agent crashed", "infrastructure-error": "infrastructure error",
 };
 export const reasonText = (r?: string) => (r ? REASONS[r] ?? r : "");
+
+/** Running state as the viewer should read it: live (runner attached), paused (no runner), or done. */
+export const liveness = (t: { status: "running" | "done"; active?: boolean; paused?: boolean }): "live" | "paused" | "done" =>
+  t.status !== "running" ? "done" : t.active === false || t.paused ? "paused" : "live";
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 export const secs = (ms: number) => ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(1)}s`;

@@ -24,7 +24,8 @@ export async function startDuel(page: Page, appURL: string, deck?: string) {
   await page.getByRole('button', { name: 'Start Duel', exact: true }).click();
   await expect(page.locator('.board3d canvas')).toBeVisible();
   await page.getByRole('button', { name: '4×', exact: true }).click();
-  await page.getByRole('button', { name: 'Auto-pass', exact: true }).click();
+  // Chain windows default to Auto (pass when nothing can respond); the old explicit Auto-pass toggle is gone.
+  await expect(page.getByRole('button', { name: /^Chain: Auto$/ })).toBeVisible();
   await expect.poll(async () => (await observation(page)).state?.turn).toBeGreaterThan(0);
 }
 export async function boardClick(page: Page, kind: 'cards' | 'places', id: string) {
@@ -52,7 +53,11 @@ export async function choose(page: Page, prompt: Prompt, ids: string[]) {
     } else if (prompt.kind === 'select_place') {
       await boardClick(page, 'places', id);
     } else {
-      await page.locator(boardMenu ? '.phase-actions' : '.prompt-panel').getByText(option.label, { exact: true }).last().click();
+      // Phase moves live in the top phase bar as "Battle →"-style buttons titled with the engine label; other
+      // board-menu options (e.g. Shuffle hand) and non-board prompts render their label text in the prompt panel.
+      const phaseGo = page.locator(`.phase-bar .phase-go[title="${option.label}"]`);
+      if (boardMenu && await phaseGo.count()) await phaseGo.last().click();
+      else await page.locator('.prompt-panel, .phase-bar, .card-menu').getByText(option.label, { exact: true }).last().click();
     }
   }
   if (!boardMenu && (await observation(page)).prompt?.promptId === prompt.promptId && await page.locator('.prompt-panel .confirm').isVisible()) {

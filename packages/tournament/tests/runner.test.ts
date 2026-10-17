@@ -114,9 +114,11 @@ describe('runner', () => {
       const options = parseOptions(['--players', 'codex-sol,codex-luna-max,claude-opus', '--games', '1', '--no-final']);
       const initial = await runTournament(options);
       expect(initial.games.filter(g => g.status === 'done')).toHaveLength(1); expect(initial.status).toBe('running');
+      expect(initial.paused).toBe(true); expect(initial.pausedAt).toBe(new Date(initial.pausedAt!).toISOString());
       const startedAt = initial.games[0]!.startedAt;
       const resumed = await runTournament({ ...options, games: undefined, resume: initial.id });
       expect(resumed.status).toBe('done'); expect(resumed.games).toHaveLength(3);
+      expect(resumed.paused).toBeUndefined(); expect(resumed.pausedAt).toBeUndefined();
       expect(resumed.games[0]!.startedAt).toBe(startedAt);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
@@ -162,6 +164,8 @@ describe('runner', () => {
     try {
       const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--no-final']), controller.signal);
       expect(result.status).toBe('running'); expect(result.games[0]!.endedAt).toBeUndefined();
+      expect(result.games[0]!.status).toBe('pending'); expect(result.paused).toBe(true);
+      expect(JSON.parse(await readFile(join(root, 'tournaments', result.id, 'tournament.json'), 'utf8'))).toEqual(result);
       expect(state.active).toBe(0);
     } finally { clearTimeout(timer); await rm(root, { recursive: true, force: true }); }
   });
@@ -170,7 +174,7 @@ describe('runner', () => {
     state.behavior = 'wait'; const controller = new AbortController(); const timer = setTimeout(() => controller.abort(), 120);
     try {
       const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--no-final', '--max-minutes', '0']), controller.signal);
-      expect(result.games[0]).toMatchObject({ status: 'running', winner: null });
+      expect(result.games[0]).toMatchObject({ status: 'pending', winner: null });
       expect(result.games[0].reason).toBeUndefined(); expect(result.games[0].endedAt).toBeUndefined();
     } finally { clearTimeout(timer); await rm(root, { recursive: true, force: true }); }
   });
@@ -218,10 +222,26 @@ describe('runner', () => {
     const root = await mkdtemp(join(tmpdir(), 'tournament-infra-'));
     vi.stubEnv('YGOSIM_TOURNAMENT_DIR', join(root, 'tournaments')); state.behavior = 'error';
     try {
-      const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--no-final']));
+      const options = parseOptions(['--players', 'codex-sol,claude-opus,pi-grok-46', '--no-final']);
+      const result = await runTournament(options);
       expect(result.status).toBe('running');
       expect(result.games[0]).toMatchObject({ status: 'error', winner: null });
+      expect(result.games.slice(1).every(game => game.status === 'pending')).toBe(true);
+      expect(result.paused).toBe(true); expect(result.pausedAt).toBe(new Date(result.pausedAt!).toISOString());
+      const path = join(root, 'tournaments', result.id, 'tournament.json');
+      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(result);
       expect(JSON.parse(await readFile(join(root, 'leaderboard.json'), 'utf8')).players.every((player: any) => player.played === 0)).toBe(true);
+      state.behavior = 'win';
+      const create = vi.mocked(createTournamentMcpServer).getMockImplementation()!;
+      vi.mocked(createTournamentMcpServer).mockImplementationOnce(async options => {
+        const stored = JSON.parse(await readFile(path, 'utf8'));
+        expect(stored.paused).toBeUndefined(); expect(stored.pausedAt).toBeUndefined();
+        return create(options);
+      });
+      const resumed = await runTournament({ ...options, resume: result.id });
+      expect(resumed.status).toBe('done'); expect(resumed.games.every(game => game.status === 'done')).toBe(true);
+      expect(resumed.paused).toBeUndefined(); expect(resumed.pausedAt).toBeUndefined();
+      expect(JSON.parse(await readFile(path, 'utf8'))).toEqual(resumed);
     } finally { await rm(root, { recursive: true, force: true }); }
   });
   it('archives interrupted attempt files before starting another attempt', async () => {

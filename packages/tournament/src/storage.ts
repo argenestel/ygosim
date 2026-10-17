@@ -3,6 +3,7 @@ import { dirname, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomBytes } from "node:crypto";
 import { computeLeaderboard } from "./standings.js";
+import { isLockActive } from "./lock.js";
 import type { Leaderboard, Tournament } from "./types.js";
 
 const DEFAULT_TOURNAMENT_DIR = fileURLToPath(new URL("../../../data/tournaments/", import.meta.url));
@@ -44,7 +45,7 @@ function safeSegment(segment: string): boolean {
 }
 
 function safeFileSegment(segment: string): boolean {
-  return /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*)$/.test(segment);
+  return segment === ".runner-lock" || /^(?:[A-Za-z0-9][A-Za-z0-9_.-]*)$/.test(segment);
 }
 
 /**
@@ -116,6 +117,8 @@ export interface TournamentSummary {
   name: string;
   createdAt: string;
   status: Tournament["status"];
+  paused: boolean;
+  active: boolean;
   players: Tournament["players"];
   done: number;
   total: number;
@@ -127,10 +130,17 @@ export function listTournaments(dir = tournamentDir()): TournamentSummary[] {
     name: tournament.name,
     createdAt: tournament.createdAt,
     status: tournament.status,
+    paused: tournament.paused === true,
+    active: isTournamentActive(tournament.id, dir),
     players: tournament.players,
     done: tournament.games.filter(game => game.status === "done").length,
     total: tournament.games.length,
   }));
+}
+
+export function isTournamentActive(tid: string, dir = tournamentDir()): boolean {
+  const path = safeExistingPath(dir, [tid, ".runner-lock"]);
+  return path !== undefined && isLockActive(path);
 }
 
 /** Promise-shaped compatibility wrapper for older storage callers. */

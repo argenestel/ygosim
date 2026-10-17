@@ -9,6 +9,7 @@ import {
   getDecisions,
   getLeaderboard,
   getTournament,
+  isTournamentActive,
   listTournaments,
   tournamentDir,
 } from "@ygosim/tournament/storage";
@@ -434,7 +435,7 @@ export function buildTournamentApi(dir = tournamentDir()): TournamentApiApp {
       const { decks, reason, error, ...publicGame } = game;
       return { ...publicGame, decks: {} };
     });
-    return c.json({ ...found.tournament, games, standings: computeStandings(found.tournament) });
+    return c.json({ ...found.tournament, active: isTournamentActive(found.tid, dir), games, standings: computeStandings(found.tournament) });
   });
 
   app.get("/api/tournaments/:tid/games/:gid/replay", (c) => {
