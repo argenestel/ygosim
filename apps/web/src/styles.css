@@ -729,3 +729,23 @@ textarea { min-height: 160px; resize: vertical; font-family: ui-monospace, monos
   .t-bubble-score { gap: 7px; }
   .t-arena-legend { gap: 9px; flex-wrap: wrap; font-size: 0.57rem; }
 }
+
+/* Tournament: game cards, deck galleries, feed structure */
+.t-seat .row { justify-content: space-between; }
+.t-seat.turn { border-left-color: var(--cyan); background: rgba(92, 200, 242, 0.06); }
+.t-lp { font-family: var(--head); font-weight: 700; font-size: 0.82rem; color: var(--gold-hi); font-variant-numeric: tabular-nums; }
+.t-lp.low { color: #ff9b95; }
+.t-game-meter { height: 3px; border-radius: 999px; background: rgba(255, 255, 255, 0.07); overflow: hidden; }
+.t-game-meter span { display: block; height: 100%; background: linear-gradient(90deg, var(--cyan), var(--gold)); transition: width 1s linear; }
+.t-deck-toggle { align-self: flex-start; padding: 4px 8px; font-size: 0.76rem; }
+.t-gallery { display: flex; flex-direction: column; gap: 6px; }
+.t-gallery .eyebrow { font-size: 0.62rem; }
+.t-cardgrid { display: grid; grid-template-columns: repeat(auto-fill, minmax(46px, 1fr)); gap: 4px; }
+.t-cardgrid .dcard { border-radius: 2px; }
+.t-cardgrid .count-badge { min-width: 15px; height: 15px; font-size: 0.6rem; padding: 0 4px; bottom: 2px; right: 2px; }
+.t-decisions li.t-turn { display: flex; align-items: center; gap: 10px; padding: 2px 0; background: none; border: none; color: var(--gold); font-family: var(--head); font-size: 0.68rem; letter-spacing: 0.16em; text-transform: uppercase; }
+.t-decisions li.t-turn::before, .t-decisions li.t-turn::after { content: ""; flex: 1; height: 1px; background: linear-gradient(90deg, transparent, rgba(214, 177, 94, 0.35), transparent); }
+.t-proof-validation.failed { color: #ff9b95; border-color: rgba(229, 83, 75, 0.35); background: rgba(229, 83, 75, 0.08); }
+.t-empty { display: flex; flex-direction: column; gap: 6px; padding: 22px 24px; border: 1px dashed var(--line-2); border-radius: 12px; background: rgba(15, 21, 32, 0.5); }
+.t-empty p { margin: 0; color: var(--dim); font-size: 0.86rem; line-height: 1.5; max-width: 640px; }
+.t-empty code { color: var(--gold-hi); font-size: 0.8rem; }

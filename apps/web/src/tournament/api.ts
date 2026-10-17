@@ -9,6 +9,10 @@ export interface TGame {
   status: "pending" | "running" | "done" | "error";
   winner: string | null; reason?: string; startedAt?: string; endedAt?: string; turns?: number;
   decks: Record<string, TDeck>; stats: Record<string, TStats>; error?: string; seed?: number; cycle?: number; attempt?: number;
+  /** Final life points per seat, when the runner recorded them. */
+  lp?: Record<string, number>;
+  /** Board snapshot of a running game, derived server-side from the last replay frame. */
+  live?: { turn: number; phase: string; turnPlayer: number; lp: [number, number]; at: string };
 }
 export interface Standing {
   id: string; label: string; model: string; elo: number; played: number; wins: number; losses: number; draws: number;
@@ -23,7 +27,7 @@ export interface Tournament {
   scored?: boolean;
   deckPolicy?: "choice" | "custom-only";
   validation?: { passed: boolean; checkedPlayers: string[]; missingPlayers: string[] };
-  audit?: { validatedBy?: string; revision?: string; sourceHash?: string; server?: string; seed?: number };
+  audit?: { validatedBy?: string; revision?: string; sourceHash?: string; server?: string; seed?: number; maxMinutes?: number; onTimeout?: "lp" | "draw" };
   series?: { bestOf: 3; seed?: number; wins: Record<string, number>; winner: string | null; complete: boolean }
 }
 export interface Leaderboard { players: Standing[]; decks: DeckStat[]; updatedAt: string }
@@ -74,6 +78,13 @@ export function relTime(d: Decision, game: TGame): number {
 
 /** Human text for what an agent picked: option labels, resolving 1-based numbers and string ids. */
 export const chosenText = (d: Decision) => d.choose.map((c) => (typeof c === "number" ? d.options?.[c - 1] : d.options?.[d.optionIds?.indexOf(String(c)) ?? -1]) ?? String(c)).join(", ") || "(pass)";
+
+/** Human label for a game-end reason. */
+export const REASONS: Record<string, string> = {
+  lp: "life points", deck: "deck out", surrender: "surrender", timeout: "time · equal LP", "time-lp": "time · LP lead",
+  "decision-timeout": "decision timeout", "invalid-actions": "illegal actions", "agent-crash": "agent crashed", "infrastructure-error": "infrastructure error",
+};
+export const reasonText = (r?: string) => (r ? REASONS[r] ?? r : "");
 
 export const pct = (x: number) => `${Math.round(x * 100)}%`;
 export const secs = (ms: number) => ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m` : `${(ms / 1000).toFixed(1)}s`;

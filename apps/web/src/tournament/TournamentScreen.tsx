@@ -1,7 +1,8 @@
-import { memo, useEffect, useMemo, useState } from "react";
-import { Modal } from "../ui/kit";
-import { chosenText, getLeaderboard, getRawLog, getTournament, listTournaments, organizerToken, pct, relTime, secs, setOrganizerToken, tailActivity, tailDecisions,
-  type Activity, type Decision, type Leaderboard, type Standing, type TGame, type TSummary, type Tournament } from "./api";
+import { Fragment, memo, useEffect, useMemo, useState } from "react";
+import { getCard, onCardCache, peekCard } from "../api";
+import { CardThumb, Modal } from "../ui/kit";
+import { chosenText, getLeaderboard, getRawLog, getTournament, listTournaments, organizerToken, pct, reasonText, relTime, secs, setOrganizerToken, tailActivity, tailDecisions,
+  type Activity, type Decision, type Leaderboard, type Standing, type TDeck, type TGame, type TSummary, type Tournament } from "./api";
 import { BrandMark, HostMark, identifyBrand, type BrandInfo } from "./brandMarks";
 import { usePoll, useFollow, useTail } from "./hooks";
 import { parseTranscript, type LogLine } from "./rawlog";
@@ -47,7 +48,7 @@ export function TournamentScreen({ onReplay, selected, onSelect }: { onReplay: (
         <button className={`ghost${hasKey ? " on" : ""}`} onClick={() => setKeyOpen(true)} title="Organizer token unlocks raw agent logs">{hasKey ? "🔓 Logs unlocked" : "🔒 Logs access"}</button>
         <select value={sel} onChange={(e) => choose(e.target.value)} aria-label="Tournament">
           <option value="board">All-time leaderboard</option>
-          {list?.map((t) => <option key={t.id} value={t.id}>{t.name} · {t.done}/{t.total}{t.status === "running" ? " · live" : ""}</option>)}
+          {list?.map((t) => <option key={t.id} value={t.id}>{t.status === "running" ? "● " : ""}{t.name} · {t.done}/{t.total}{t.status === "running" ? " · live" : ""}</option>)}
         </select>
       </div>
       {listErr && !list && <p className="err">Tournament API unavailable: {listErr}</p>}
@@ -76,7 +77,13 @@ function AllTime({ list, onOpen }: { list: TSummary[]; onOpen: (id: string) => v
         <h2>Benchmark leaderboard</h2>
         <p className="muted">Every finished game across all tournaments. Elo starts at 1500 (K=32); win = 3 pts, draw = 1.</p>
         {err && !lb && <p className="err">{err}</p>}
-        {lb && <StandingsTable rows={lb.players} />}
+        {lb && lb.players.length > 0 && <StandingsTable rows={lb.players} />}
+        {lb && lb.players.length === 0 && (
+          <div className="t-empty">
+            <span className="eyebrow">No scored games yet</span>
+            <p>Validation runs never enter the leaderboard. Pass a validation, then launch a scored tournament with <code>--validated-by &lt;id&gt;</code>{list.some((t) => t.status === "running") ? " — a tournament is live right now, pick it above to watch." : "."}</p>
+          </div>
+        )}
       </section>
       {lb && lb.decks.length > 0 && (
         <section className="t-section">
@@ -159,8 +166,9 @@ function TournamentProof({ t, done, total }: { t: Tournament; done: number; tota
         <i aria-hidden="true" />{scoreStateLabel(state)}
       </span>
       {t.scored === false && (
-        <span className={`t-proof t-proof-validation${validation?.passed ? " passed" : ""}`}>
-          <i aria-hidden="true" />{validation?.passed ? "Roster validated" : "Validation pending"}
+        <span className={`t-proof t-proof-validation${validation?.passed ? " passed" : t.status === "done" ? " failed" : ""}`}
+          title={validation && !validation.passed && validation.missingPlayers.length ? `Missing a clean finished game for: ${validation.missingPlayers.join(", ")}` : undefined}>
+          <i aria-hidden="true" />{validation?.passed ? "Roster validated" : t.status === "done" ? "Validation failed" : "Validation pending"}
         </span>
       )}
       {t.scored === true && <span className="t-proof t-proof-api"><i aria-hidden="true" />API result feed</span>}
@@ -215,8 +223,9 @@ function PlayerBubble({ p, t, rank, state }: { p: Tournament["players"][number];
   const live = games.some((g) => g.status === "running");
   const recorded = games.some((g) => g.status === "done");
   const standing = t.standings.find((s) => s.id === p.id);
-  const status = live ? "live" : recorded ? (state === "validation" ? "validated" : "scored") : "queued";
-  const statusLabel = live ? "Live" : recorded ? (state === "validation" ? "Validated" : "Recorded") : "Queued";
+  const validated = state === "validation" && !!t.validation?.checkedPlayers.includes(p.id);
+  const status = live ? "live" : validated ? "validated" : recorded ? "scored" : "queued";
+  const statusLabel = live ? "Live" : validated ? "Validated" : recorded ? "Recorded" : "Queued";
   const cli = CLI_TAG[p.cli] ?? p.cli;
   const latestDeck = [...games].reverse().find((g) => g.decks[p.id])?.decks[p.id];
   return (
@@ -270,7 +279,7 @@ function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tourname
       {live.length > 0 && (
         <section className="t-section">
           <h2>Live now</h2>
-          <div className="t-games">{live.map((g) => <GameCard key={g.id} g={g} label={label} onOpen={() => setOpenId(g.id)} />)}</div>
+          <div className="t-games">{live.map((g) => <GameCard key={g.id} g={g} t={t} label={label} onOpen={() => setOpenId(g.id)} />)}</div>
         </section>
       )}
       {t.series && <p className="muted">Series: {t.players.map(p => `${p.label} ${t.series!.wins[p.id] ?? 0}`).join(" — ")} · {t.series.winner ? `${label(t.series.winner)} wins` : t.series.complete ? "No first-to-two winner" : "First to two wins; maximum three games"}</p>}
@@ -280,11 +289,11 @@ function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tourname
         <section className="t-section" key={st}>
           <h2>{st === "final" ? "Final" : st === "series" ? "Best-of-three series" : "Round robin"}</h2>
           <div className="t-games">
-            {t.games.filter((g) => g.stage === st).map((g) => <GameCard key={g.id} g={g} label={label} onOpen={() => setOpenId(g.id)} />)}
+            {t.games.filter((g) => g.stage === st).map((g) => <GameCard key={g.id} g={g} t={t} label={label} onOpen={() => setOpenId(g.id)} />)}
           </div>
         </section>
       ))}
-      {open && <GameDetail tid={t.id} g={open} label={label} onClose={() => setOpenId(null)} onReplay={() => onReplay(t, open)} />}
+      {open && <GameDetail t={t} g={open} label={label} onClose={() => setOpenId(null)} onReplay={() => onReplay(t, open)} />}
     </>
   );
 }
@@ -315,16 +324,45 @@ function CrossTable({ t, label, onOpen }: { t: Tournament; label: (p: string) =>
   );
 }
 
-const GameCard = memo(function GameCard({ g, label, onOpen }: { g: TGame; label: (p: string) => string; onOpen: () => void }) {
+const PHASE: Record<string, string> = { draw: "Draw", standby: "Standby", main1: "Main 1", battle: "Battle", main2: "Main 2", end: "End" };
+const fmtLp = (n: number) => n.toLocaleString();
+
+/** Live board line for a running game: turn, phase and whose turn it is. */
+function liveLine(g: TGame, label: (p: string) => string): string | undefined {
+  const l = g.live; if (!l) return undefined;
+  return `Turn ${l.turn} · ${PHASE[l.phase] ?? l.phase} · ${label(g.seats[l.turnPlayer] ?? "")}`;
+}
+
+const GameCard = memo(function GameCard({ g, t, label, onOpen }: { g: TGame; t: Tournament; label: (p: string) => string; onOpen: () => void }) {
+  const running = g.status === "running";
+  const now = useNow(running);
+  const cap = (t.audit?.maxMinutes ?? 0) * 60_000;
+  const elapsed = running && g.startedAt ? Math.max(0, now - Date.parse(g.startedAt)) : 0;
+  const dur = g.startedAt && g.endedAt ? Date.parse(g.endedAt) - Date.parse(g.startedAt) : 0;
+  const lpOf = (p: string, i: number) => g.lp?.[p] ?? g.live?.lp[i];
   return (
     <button className={`t-game ${g.status}`} onClick={onOpen}>
-      <div className="t-game-head"><span className="muted small">R{g.round}</span><span className={`chip${g.status === "running" ? " ok" : g.status === "error" ? " bad" : ""}`}>{g.status === "running" ? "● live" : g.status}</span></div>
-      {g.seats.map((p) => (
-        <div key={p} className={`t-seat${g.winner === p ? " won" : g.status === "done" && g.winner !== null ? " lost" : ""}`}>
-          <b>{label(p)}</b><span className="muted small">{g.decks[p]?.name ?? (g.status === "pending" ? "waiting" : "building deck…")}</span>
-        </div>
-      ))}
-      <div className="muted small">{g.status === "done" ? `${g.winner === null ? "Draw" : `${label(g.winner)} won`} · ${g.reason ?? ""}${g.turns ? ` · ${g.turns} turns` : ""}` : g.error ?? ""}</div>
+      <div className="t-game-head">
+        <span className="muted small">{g.stage === "final" ? "Final" : `R${g.round}`}{running && g.live ? ` · T${g.live.turn}` : ""}</span>
+        <span className={`chip${running ? " ok" : g.status === "error" ? " bad" : ""}`}>{running ? "● live" : g.status}</span>
+      </div>
+      {g.seats.map((p, i) => {
+        const lp = lpOf(p, i), turn = running && g.live && g.live.turnPlayer === i;
+        return (
+          <div key={p} className={`t-seat${g.winner === p ? " won" : g.status === "done" && g.winner !== null ? " lost" : ""}${turn ? " turn" : ""}`}>
+            <div className="row"><b>{label(p)}</b>{lp !== undefined && <span className={`t-lp${lp <= 2000 ? " low" : ""}`}>{fmtLp(lp)}</span>}</div>
+            <span className="muted small">{g.decks[p]?.name ?? (g.status === "pending" ? "waiting" : "building deck…")}</span>
+          </div>
+        );
+      })}
+      {running && cap > 0 && (
+        <div className="t-game-meter" title={`${secs(elapsed)} of a ${t.audit!.maxMinutes}m cap`}><span style={{ width: `${Math.min(100, (elapsed / cap) * 100)}%` }} /></div>
+      )}
+      <div className="muted small">
+        {g.status === "done" ? `${g.winner === null ? "Draw" : `${label(g.winner)} won`} · ${reasonText(g.reason)}${g.turns ? ` · ${g.turns} turns` : ""}${dur ? ` · ${secs(dur)}` : ""}`
+          : running ? (liveLine(g, label) ?? (Object.keys(g.decks).length < 2 ? "Agents are building decks" : "Duel starting")) + (elapsed ? ` · ${secs(elapsed)}` : "")
+          : g.error ?? ""}
+      </div>
     </button>
   );
 });
@@ -339,7 +377,8 @@ function useNow(active: boolean) {
 type Row = Decision & { pid: string; rt: number };
 type View = "reasoning" | "activity" | "raw";
 
-function GameDetail({ tid, g, label, onClose, onReplay }: { tid: string; g: TGame; label: (p: string) => string; onClose: () => void; onReplay: () => void }) {
+function GameDetail({ t, g, label, onClose, onReplay }: { t: Tournament; g: TGame; label: (p: string) => string; onClose: () => void; onReplay: () => void }) {
+  const tid = t.id;
   const live = g.status === "running";
   const [seat, setSeat] = useState<string>("both");
   const [view, setView] = useState<View>("reasoning");
@@ -349,6 +388,7 @@ function GameDetail({ tid, g, label, onClose, onReplay }: { tid: string; g: TGam
   const decisions: Record<string, typeof d0> = { [a]: d0, [b]: d1 };
   const now = useNow(live);
   const dur = g.startedAt && g.endedAt ? Date.parse(g.endedAt) - Date.parse(g.startedAt) : 0;
+  const lpLine = g.lp ? ` · ${g.seats.map((p) => fmtLp(g.lp![p] ?? 0)).join(" – ")} LP` : "";
   const result = g.status === "done" ? (g.winner === null ? "Draw" : `${label(g.winner)} won`) : g.status === "running" ? "● live" : g.status;
   const rows = useMemo<Row[]>(() => {
     const pick = seat === "both" ? g.seats : [seat];
@@ -358,7 +398,7 @@ function GameDetail({ tid, g, label, onClose, onReplay }: { tid: string; g: TGam
   const last = g.startedAt && rows.length ? Date.parse(g.startedAt) + Math.max(...rows.map((r) => r.rt)) : 0;
 
   return (
-    <Modal title={`${label(a)} vs ${label(b)}`} subtitle={`${g.stage === "final" ? "Final" : `Round ${g.round}`} · ${result}${g.reason ? ` (${g.reason})` : ""}${g.turns ? ` · ${g.turns} turns` : ""}${dur ? ` · ${secs(dur)}` : ""}`}
+    <Modal title={`${label(a)} vs ${label(b)}`} subtitle={`${g.stage === "final" ? "Final" : `Round ${g.round}`} · ${result}${g.reason ? ` (${reasonText(g.reason)})` : ""}${lpLine}${g.turns ? ` · ${g.turns} turns` : ""}${dur ? ` · ${secs(dur)}` : ""}`}
       onClose={onClose} width={960}
       footer={<><button className="ghost" onClick={onClose}>Close</button><button className="primary" disabled={g.status === "pending"} onClick={onReplay}>{live ? "Watch live" : "Watch replay"}</button></>}>
       {g.error && <p className="err">{g.error}</p>}
@@ -371,6 +411,7 @@ function GameDetail({ tid, g, label, onClose, onReplay }: { tid: string; g: TGam
               {d ? <>
                 <div className="row"><h3>{d.name}</h3><span className={`chip${d.source === "custom" ? " gold" : ""}`}>{d.source === "custom" ? "built by agent" : d.source}</span><span className="muted small">{d.main.length} main · {d.extra.length} extra</span></div>
                 <blockquote>{d.reason || <span className="muted">No reason given.</span>}</blockquote>
+                <DeckGallery deck={d} />
               </> : <p className="muted">{g.status === "pending" ? "Waiting to start." : "Building a deck…"}</p>}
               {s && <div className="t-stats">
                 <span><b>{s.decisions}</b> decisions</span><span><b>{secs(s.avgDecisionMs)}</b> avg think</span>
@@ -389,12 +430,39 @@ function GameDetail({ tid, g, label, onClose, onReplay }: { tid: string; g: TGam
         <div className="seg t-tabs">
           {(["reasoning", "activity", "raw"] as const).map((v) => <button key={v} className={view === v ? "on" : ""} onClick={() => setView(v)}>{v === "reasoning" ? "Reasoning" : v === "activity" ? "Tool activity" : "Raw log"}</button>)}
         </div>
-        {live && <span className="chip ok">● live{last ? ` · last move ${secs(Math.max(0, now - last))} ago` : " · waiting for first move"}</span>}
+        {live && <span className="chip ok">● live{g.live ? ` · ${liveLine(g, label)}` : ""}{last ? ` · last move ${secs(Math.max(0, now - last))} ago` : " · waiting for first move"}</span>}
       </div>
       {view === "reasoning" && <Reasoning rows={rows} label={label} seats={g.seats} live={live} loaded={d0.loaded && d1.loaded} error={d0.error ?? d1.error} />}
       {view === "activity" && <ActivityFeed tid={tid} g={g} seat={seat} label={label} live={live} />}
       {view === "raw" && <RawLog tid={tid} g={g} seat={seat === "both" ? a : seat} label={label} live={live} />}
     </Modal>
+  );
+}
+
+/** Resolve card names for hover titles; re-renders as the shared card cache fills. */
+function useCardNames(codes: number[]) {
+  const [, bump] = useState(0);
+  useEffect(() => { codes.forEach((c) => { if (!peekCard(c)) getCard(c); }); return onCardCache(() => bump((n) => n + 1)); }, [codes]);
+  return (code: number) => peekCard(code)?.name ?? `#${code}`;
+}
+
+function DeckGallery({ deck }: { deck: TDeck }) {
+  const [open, setOpen] = useState(false);
+  const groups = useMemo(() => {
+    const tally = (codes: number[]) => { const m = new Map<number, number>(); codes.forEach((c) => m.set(c, (m.get(c) ?? 0) + 1)); return [...m]; };
+    return { main: tally(deck.main), extra: tally(deck.extra), side: tally(deck.side ?? []) };
+  }, [deck]);
+  const codes = useMemo(() => (open ? [...new Set([...deck.main, ...deck.extra, ...(deck.side ?? [])])] : []), [deck, open]);
+  const name = useCardNames(codes);
+  if (!open) return <button className="ghost t-deck-toggle" onClick={() => setOpen(true)}>Show cards ({deck.main.length} main · {deck.extra.length} extra{deck.side?.length ? ` · ${deck.side.length} side` : ""})</button>;
+  const grid = (rows: [number, number][]) => <div className="t-cardgrid">{rows.map(([code, n]) => <CardThumb key={code} code={code} count={n > 1 ? n : undefined} title={name(code)} />)}</div>;
+  return (
+    <div className="t-gallery">
+      <div className="row"><span className="eyebrow">Main · {deck.main.length}</span><span className="spacer" /><button className="ghost t-deck-toggle" onClick={() => setOpen(false)}>Hide cards</button></div>
+      {grid(groups.main)}
+      {groups.extra.length > 0 && <><span className="eyebrow">Extra · {deck.extra.length}</span>{grid(groups.extra)}</>}
+      {groups.side.length > 0 && <><span className="eyebrow">Side · {deck.side!.length}</span>{grid(groups.side)}</>}
+    </div>
   );
 }
 
@@ -413,7 +481,10 @@ function Reasoning({ rows, label, seats, live, loaded, error }: { rows: Row[]; l
   return (
     <div className="t-feed">
       <ol className="t-decisions" ref={ref} onScroll={onScroll}>
-        {rows.map((d, i) => <DecisionItem key={`${d.pid}:${d.t}:${i}`} d={d} who={label(d.pid)} side={d.pid === seats[0] ? 0 : 1} />)}
+        {rows.map((d, i) => <Fragment key={`${d.pid}:${d.t}:${i}`}>
+          {d.turn !== undefined && d.turn !== rows[i - 1]?.turn && <li className="t-turn" aria-label={`Turn ${d.turn}`}><span>Turn {d.turn}</span></li>}
+          <DecisionItem d={d} who={label(d.pid)} side={d.pid === seats[0] ? 0 : 1} />
+        </Fragment>)}
         {!rows.length && <li className="muted">{!loaded ? "Loading…" : error ? `Reasoning unavailable: ${error}` : live ? "Waiting for the first move — agents are still building their decks." : "No decisions recorded."}</li>}
       </ol>
       {away && <button className="t-jump" onClick={jump}>↓ Latest</button>}
