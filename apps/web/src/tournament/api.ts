@@ -1,14 +1,14 @@
 // Client for the tournament API described in docs/TOURNAMENT.md.
 import type { Frame } from "./replay";
 
-export interface TPlayer { id: string; label: string; cli: "codex" | "pi" | "claude"; model: string; effort?: string }
-export interface TDeck { name: string; source: "sample" | "custom"; reason: string; main: number[]; extra: number[] }
+export interface TPlayer { id: string; label: string; cli: "codex" | "pi" | "claude" | "agy"; model: string; effort?: string; codeMode?: boolean }
+export interface TDeck { name: string; source: "sample" | "custom"; reason: string; main: number[]; extra: number[]; side?: number[]; fingerprint?: string }
 export interface TStats { decisions: number; avgDecisionMs: number; invalid: number; toolCalls: number; resumes: number; reasonsGiven: number }
 export interface TGame {
   id: string; stage: "round-robin" | "final" | "series"; round: number; seats: [string, string];
   status: "pending" | "running" | "done" | "error";
   winner: string | null; reason?: string; startedAt?: string; endedAt?: string; turns?: number;
-  decks: Record<string, TDeck>; stats: Record<string, TStats>; error?: string;
+  decks: Record<string, TDeck>; stats: Record<string, TStats>; error?: string; seed?: number; cycle?: number; attempt?: number;
 }
 export interface Standing {
   id: string; label: string; model: string; elo: number; played: number; wins: number; losses: number; draws: number;
@@ -17,7 +17,15 @@ export interface Standing {
 }
 export interface DeckStat { name: string; source: "sample" | "custom"; picks: number; wins: number; pickedBy: Record<string, number> }
 export interface TSummary { id: string; name: string; createdAt: string; status: "running" | "done"; players: TPlayer[]; done: number; total: number }
-export interface Tournament { id: string; name: string; createdAt: string; status: "running" | "done"; format: string; players: TPlayer[]; games: TGame[]; standings: Standing[]; series?: { bestOf: 3; wins: Record<string, number>; winner: string | null; complete: boolean } }
+export interface Tournament {
+  id: string; name: string; createdAt: string; status: "running" | "done"; format: string; players: TPlayer[]; games: TGame[]; standings: Standing[];
+  /** Explicit provenance from the runner. Undefined means legacy data with no scoring claim. */
+  scored?: boolean;
+  deckPolicy?: "choice" | "custom-only";
+  validation?: { passed: boolean; checkedPlayers: string[]; missingPlayers: string[] };
+  audit?: { validatedBy?: string; revision?: string; sourceHash?: string; server?: string; seed?: number };
+  series?: { bestOf: 3; seed?: number; wins: Record<string, number>; winner: string | null; complete: boolean }
+}
 export interface Leaderboard { players: Standing[]; decks: DeckStat[]; updatedAt: string }
 export interface Activity { t: number; tool: string; ok: boolean; ms: number; summary: string }
 export interface Decision { t: number; turn?: number; phase?: string; promptId?: string; promptKind?: string; options?: string[]; optionIds?: string[]; choose: (string | number)[]; reason?: string; ms?: number }

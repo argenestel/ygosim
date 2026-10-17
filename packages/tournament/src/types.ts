@@ -1,6 +1,6 @@
 import type { ServerMsg } from '@ygosim/protocol';
 
-export type Cli = "codex" | "pi" | "claude";
+export type Cli = "codex" | "pi" | "claude" | "agy";
 export type GameStage = "round-robin" | "final" | "series";
 export type GameStatus = "pending" | "running" | "done" | "error";
 export type TournamentStatus = "running" | "done";

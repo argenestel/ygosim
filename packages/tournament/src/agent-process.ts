@@ -13,7 +13,7 @@ export function agentCommand(player: Player, url: string, workdir: string, promp
   const keys = ['PATH', 'HOME', 'LANG', 'LC_ALL', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY'];
   keys.push(...(player.cli === 'codex' ? ['OPENAI_API_KEY', 'OPENAI_BASE_URL'] : player.cli === 'claude'
     ? ['ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'ANTHROPIC_BASE_URL']
-    : player.model.startsWith('fireworks/') ? ['FIREWORKS_API_KEY'] : player.model.startsWith('openai-codex/') ? [] : ['XAI_API_KEY']));
+    : player.model.startsWith('fireworks/') ? ['FIREWORKS_API_KEY'] : player.model.startsWith('xai/') ? ['XAI_API_KEY'] : []));
   const env: NodeJS.ProcessEnv = Object.fromEntries(keys.flatMap(key => process.env[key] === undefined ? [] : [[key, process.env[key]]]));
   if (authorization) env.YGOSIM_MCP_TOKEN = authorization.replace(/^Bearer /, '');
   if (player.cli === 'codex') {

@@ -11,7 +11,8 @@ import type { Tournament } from '../src/types.js';
 const roots: string[] = [];
 afterEach(async () => { vi.unstubAllEnvs(); for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true }); });
 const audit: NonNullable<Tournament['audit']> = { revision: 'fixture', dirty: true, sourceHash: 'fixture-hash', node: process.version, cliVersions: { codex: '0.160.0', claude: '2.1.289' }, server: 'ws://localhost:7777/', decisionTimeoutMs: 600000, maxInvalid: 5, seed: 42, cycles: 1, mirrored: false };
-const players = [ROSTER[0]!, ROSTER.at(-1)!];
+// Explicit copies without codeMode so the gate's legacy-field handling is what the tests exercise.
+const players = [ROSTER[0]!, ROSTER.at(-1)!].map(({ codeMode: _codeMode, ...player }) => player);
 
 function fixture(): Tournament {
   const decks = Object.fromEntries(players.map(player => [player.id, { name: 'Fixture', source: 'custom' as const, reason: 'test', main: [1], extra: [] }]));

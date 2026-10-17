@@ -10,17 +10,17 @@ vi.mock('../src/sandbox.js', () => ({ sandboxCommand: async (command: any) => ({
 import { agentCommand, runAgent } from '../src/agent-process.js';
 import { getRosterPlayer, ROSTER } from '../src/roster.js';
 afterEach(() => { vi.useRealTimers(); vi.unstubAllEnvs(); spawnMock.mockReset(); });
-it('opts only Luna into code mode while preserving other Codex restrictions on launch and resume', () => {
+it('opts modern Codex entrants into code mode while preserving launch and resume restrictions', () => {
   const luna = getRosterPlayer('codex-luna-max')!;
-  expect(ROSTER.filter(player => player.codeMode).map(player => player.id)).toEqual([luna.id]);
+  expect(ROSTER.filter(player => player.codeMode).map(player => player.id)).toEqual(['codex-sol', luna.id]);
   for (const player of ROSTER.filter(player => player.cli === 'codex')) {
     for (const resume of [false, true]) {
       const { args } = agentCommand(player, 'http://localhost/mcp', '/fixture', 'play', 'thread', resume);
       const disabled = args.flatMap((arg, index) => arg === '--disable' ? [args[index + 1]] : []);
       const enabled = args.flatMap((arg, index) => arg === '--enable' ? [args[index + 1]] : []);
       for (const feature of ['code_mode_host', 'code_mode']) {
-        expect(disabled.includes(feature)).toBe(player.id !== luna.id);
-        expect(enabled.includes(feature)).toBe(player.id === luna.id);
+        expect(disabled.includes(feature)).toBe(!player.codeMode);
+        expect(enabled.includes(feature)).toBe(!!player.codeMode);
       }
       for (const feature of ['shell_tool', 'apps', 'browser_use', 'browser_use_external', 'computer_use', 'hooks', 'plugins', 'skill_search']) {
         expect(disabled).toContain(feature);
@@ -205,6 +205,22 @@ it('selects Luna through Pi openai-codex with max thinking and no unrelated prov
   const custom = agentCommand(getRosterPlayer('pi-luna-max')!, 'http://localhost/mcp', '/fixture', 'play', '', false, undefined, true);
   expect(custom.args[custom.args.indexOf('--tools') + 1]).not.toContain('list_decks');
   expect(custom.args[custom.args.indexOf('--tools') + 1]).toContain('card_info');
+});
+
+it('launches the requested Grok xhigh entrant and scopes provider credentials', () => {
+  vi.stubEnv('XAI_API_KEY', 'synthetic-xai-fixture');
+  vi.stubEnv('FIREWORKS_API_KEY', 'synthetic-fireworks-fixture');
+  vi.stubEnv('OPENCODE_API_KEY', 'synthetic-opencode-fixture');
+  const player = getRosterPlayer('pi-grok-46-xhigh')!;
+  expect(player.model).toBe('xai/grok-4.6');
+  const command = agentCommand(player, 'http://localhost/mcp', '/fixture', 'play', '', false);
+  expect(command.args[command.args.indexOf('--thinking') + 1]).toBe('xhigh');
+  expect(command.env.XAI_API_KEY).toBe('synthetic-xai-fixture');
+  expect(command.env).not.toHaveProperty('FIREWORKS_API_KEY');
+  expect(command.env).not.toHaveProperty('OPENCODE_API_KEY');
+  const google = agentCommand({ id: 'google-fixture', label: 'Google', cli: 'pi', model: 'google-antigravity/gemini-3.8-flash' }, 'url', '/fixture', 'play', '', false);
+  expect(google.env).not.toHaveProperty('XAI_API_KEY');
+  expect(google.env).not.toHaveProperty('FIREWORKS_API_KEY');
 });
 
 it('audits Pi provider, model and effective thinking level from its private session metadata', async () => {

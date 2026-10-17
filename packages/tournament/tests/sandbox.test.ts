@@ -7,6 +7,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { agyCommand, agyMcpConfigPath } from '../src/agy.js';
 import { agentCommand } from '../src/agent-process.js';
 import { ROSTER } from '../src/roster.js';
 import { sandboxCommand } from '../src/sandbox.js';
@@ -151,6 +152,47 @@ describe('filesystem sandbox', () => {
     await fs.access(join(source, filenames[0]!));
   });
 
+  it('clones only Antigravity auth rows, writes private MCP config, and removes both on cleanup', async () => {
+    const setup = await fixture();
+    const sourceDirectory = join(setup.hostHome, '.config', 'Antigravity', 'User', 'globalStorage');
+    const source = join(sourceDirectory, 'state.vscdb');
+    await fs.mkdir(sourceDirectory, { recursive: true, mode: 0o700 });
+    const tokenSource = join(setup.hostHome, '.gemini', 'antigravity-cli');
+    await fs.mkdir(tokenSource, { recursive: true, mode: 0o700 });
+    await fs.writeFile(join(tokenSource, 'antigravity-oauth-token'), JSON.stringify({
+      token: { access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token' }, id_token: 'synthetic-id-token',
+    }), { mode: 0o600 });
+    await execute('sqlite3', [source,
+      "CREATE TABLE ItemTable (key TEXT UNIQUE ON CONFLICT REPLACE, value BLOB); INSERT INTO ItemTable VALUES ('antigravityAuthStatus','synthetic-auth-status'), ('antigravityUnifiedStateSync.oauthToken','synthetic-oauth-token'), ('unrelated','must-not-clone');",
+    ]);
+    const command = agyCommand({ id: 'fixture', label: 'Fixture', cli: 'agy', model: 'gemini-3.8-flash-high', effort: 'high' },
+      'http://127.0.0.1:4123/mcp', setup.workdir, 'fixture', '', false, 'Bearer synthetic-mcp-token');
+    command.env.HOME = setup.hostHome;
+    command.env.PATH = setup.env.PATH;
+    const wrapped = await sandboxCommand(command, setup.workdir, player('agy'));
+    cleanups.push(wrapped.cleanup);
+    const configPath = agyMcpConfigPath(wrapped.env.HOME!);
+    expect(JSON.parse(await fs.readFile(configPath, 'utf8'))).toEqual({
+      mcpServers: { ygosim: { url: 'http://127.0.0.1:4123/mcp', headers: { Authorization: 'Bearer synthetic-mcp-token' } } },
+    });
+    expect((await fs.stat(configPath)).mode & 0o777).toBe(0o600);
+    const tokenPath = join(wrapped.env.HOME!, '.gemini', 'antigravity-cli', 'antigravity-oauth-token');
+    expect(JSON.parse(await fs.readFile(tokenPath, 'utf8'))).toEqual({
+      token: { access_token: 'synthetic-access-token', refresh_token: 'synthetic-refresh-token' }, id_token: 'synthetic-id-token',
+    });
+    expect((await fs.stat(tokenPath)).mode & 0o777).toBe(0o600);
+    expect(wrapped.env.SSH_CONNECTION).toBe('ygosim-isolated');
+    expect(wrapped.env).not.toHaveProperty('DBUS_SESSION_BUS_ADDRESS');
+    const cloned = join(wrapped.env.XDG_CONFIG_HOME!, 'Antigravity', 'User', 'globalStorage', 'state.vscdb');
+    const { stdout } = await execute('sqlite3', ['-json', cloned, 'SELECT key FROM ItemTable ORDER BY key;']);
+    expect(JSON.parse(stdout)).toEqual([
+      { key: 'antigravityAuthStatus' }, { key: 'antigravityUnifiedStateSync.oauthToken' },
+    ]);
+    expect(wrapped.redact('synthetic-auth-status synthetic-access-token synthetic-refresh-token synthetic-id-token synthetic-mcp-token')).toBe('[REDACTED] [REDACTED] [REDACTED] [REDACTED] [REDACTED]');
+    await wrapped.cleanup();
+    await expect(fs.access(join(setup.workdir, '.home'))).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
   it('resolves a PATH symlink to the real executable', async () => {
     const setup = await fixture();
     const bin = join(setup.root, 'bin');
@@ -258,7 +300,7 @@ describe('filesystem sandbox', () => {
     await expect(fs.access(join(setup.workdir, '.home'))).rejects.toMatchObject({ code: 'ENOENT' });
   });
 
-  for (const cli of ['codex', 'claude', 'pi'] as const) it(`runs installed ${cli} --version without credentials or model calls`, async () => {
+  for (const cli of ['codex', 'claude', 'pi', 'agy'] as const) it(`runs installed ${cli} --version without credentials or model calls`, async () => {
     const setup = await fixture();
     const wrapped = await sandboxCommand({ command: cli, args: ['--version'], env: setup.env }, setup.workdir, player(cli), { cloneCredentials: false });
     cleanups.push(wrapped.cleanup);

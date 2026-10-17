@@ -2,11 +2,35 @@ import { memo, useEffect, useMemo, useState } from "react";
 import { Modal } from "../ui/kit";
 import { chosenText, getLeaderboard, getRawLog, getTournament, listTournaments, organizerToken, pct, relTime, secs, setOrganizerToken, tailActivity, tailDecisions,
   type Activity, type Decision, type Leaderboard, type Standing, type TGame, type TSummary, type Tournament } from "./api";
+import { BrandMark, HostMark, identifyBrand, type BrandInfo } from "./brandMarks";
 import { usePoll, useFollow, useTail } from "./hooks";
 import { parseTranscript, type LogLine } from "./rawlog";
 
-const CLI_TAG: Record<string, string> = { codex: "Codex", pi: "pi", claude: "Claude Code" };
+const CLI_TAG: Record<string, string> = { codex: "Codex", pi: "pi", claude: "Claude Code", agy: "Antigravity" };
 const LIVE_POLL_MS = 3000;
+
+type TournamentScoreState = "scoring" | "validation" | "scored" | "unknown";
+
+function scoreState(t: Tournament): TournamentScoreState {
+  if (t.scored === true) return t.status === "done" ? "scored" : "scoring";
+  if (t.scored === false) return "validation";
+  return "unknown";
+}
+
+function scoreStateLabel(state: TournamentScoreState): string {
+  if (state === "scoring") return "Scoring live";
+  if (state === "scored") return "Scored";
+  if (state === "validation") return "Validation run";
+  return "Score state unavailable";
+}
+
+function playerBrand(p: { id: string; label: string; model: string }): BrandInfo {
+  return identifyBrand([p.id, p.label, p.model]);
+}
+
+function standingsRank(rows: Standing[]): Map<string, number> {
+  return new Map([...rows].sort((a, b) => b.points - a.points || b.elo - a.elo).map((row, index) => [row.id, index + 1]));
+}
 
 export function TournamentScreen({ onReplay, selected, onSelect }: { onReplay: (t: Tournament, g: TGame) => void; selected?: string; onSelect?: (id: string) => void }) {
   const [list, listErr] = usePoll(listTournaments, [], () => 5000);
@@ -126,6 +150,101 @@ const StandingsTable = memo(function StandingsTable({ rows }: { rows: Standing[]
   );
 });
 
+function TournamentProof({ t, done, total }: { t: Tournament; done: number; total: number }) {
+  const state = scoreState(t);
+  const validation = t.validation;
+  return (
+    <div className="t-proof-row" aria-label="Tournament scoring state">
+      <span className={`t-proof t-proof-${state}`}>
+        <i aria-hidden="true" />{scoreStateLabel(state)}
+      </span>
+      {t.scored === false && (
+        <span className={`t-proof t-proof-validation${validation?.passed ? " passed" : ""}`}>
+          <i aria-hidden="true" />{validation?.passed ? "Roster validated" : "Validation pending"}
+        </span>
+      )}
+      {t.scored === true && <span className="t-proof t-proof-api"><i aria-hidden="true" />API result feed</span>}
+      {t.scored === undefined && <span className="t-proof t-proof-legacy">Legacy record · no scoring claim</span>}
+      <span className="t-proof-count">{total ? `${done}/${total} games recorded` : "No games scheduled"}</span>
+    </div>
+  );
+}
+
+function TournamentArena({ t, done, live }: { t: Tournament; done: number; live: number }) {
+  const state = scoreState(t);
+  const total = t.games.length;
+  const ranks = standingsRank(t.standings);
+  const progress = total ? Math.min(100, Math.round((done / total) * 100)) : 0;
+  return (
+    <section className="t-arena" aria-labelledby="t-arena-title">
+      <div className="t-arena-head">
+        <div>
+          <span className="t-arena-eyebrow">LIVE AGENT ARENA</span>
+          <h2 id="t-arena-title">{t.name}</h2>
+          <p>{t.players.length} entrants <span>·</span> {t.format} <span>·</span> live API feed</p>
+        </div>
+        <TournamentProof t={t} done={done} total={total} />
+      </div>
+      <div className="t-arena-meter" aria-label={`${done} of ${total} games recorded`}>
+        <span style={{ width: `${progress}%` }} />
+      </div>
+      <div className="t-bubble-stage">
+        <div className="t-orbit t-orbit-outer" aria-hidden="true" />
+        <div className="t-orbit t-orbit-inner" aria-hidden="true" />
+        <div className="t-arena-core">
+          <span className="t-core-kicker">TOURNAMENT SCORE</span>
+          <strong>{total ? `${done}/${total}` : "—"}</strong>
+          <span>{state === "scoring" ? `${live} live ${live === 1 ? "match" : "matches"}` : scoreStateLabel(state)}</span>
+        </div>
+        <div className="t-bubble-grid">
+          {t.players.map((p) => <PlayerBubble key={p.id} p={p} t={t} rank={ranks.get(p.id)} state={state} />)}
+        </div>
+      </div>
+      <div className="t-arena-legend" aria-hidden="true">
+        <span><i className="t-legend-dot live" />live match</span>
+        <span><i className="t-legend-dot scored" />recorded result</span>
+        <span><i className="t-legend-dot queued" />queued</span>
+      </div>
+    </section>
+  );
+}
+
+function PlayerBubble({ p, t, rank, state }: { p: Tournament["players"][number]; t: Tournament; rank?: number; state: TournamentScoreState }) {
+  const brand = playerBrand(p);
+  const games = t.games.filter((g) => g.seats.includes(p.id));
+  const live = games.some((g) => g.status === "running");
+  const recorded = games.some((g) => g.status === "done");
+  const standing = t.standings.find((s) => s.id === p.id);
+  const status = live ? "live" : recorded ? (state === "validation" ? "validated" : "scored") : "queued";
+  const statusLabel = live ? "Live" : recorded ? (state === "validation" ? "Validated" : "Recorded") : "Queued";
+  const cli = CLI_TAG[p.cli] ?? p.cli;
+  const latestDeck = [...games].reverse().find((g) => g.decks[p.id])?.decks[p.id];
+  return (
+    <article className={`t-bubble t-bubble-${status}`} aria-label={`${p.label}, ${statusLabel}`}>
+      <div className="t-bubble-top">
+        <span className="t-bubble-rank">{rank && standing?.played ? `#${rank}` : "—"}</span>
+        <span className={`t-bubble-status t-bubble-status-${status}`}><i aria-hidden="true" />{statusLabel}</span>
+      </div>
+      <div className="t-bubble-brand-row">
+        <BrandMark brand={brand} size="sm" />
+        {brand.host && <HostMark />}
+      </div>
+      <h3>{p.label}</h3>
+      <p className="t-bubble-model" title={p.model}>{p.model}</p>
+      <p className="t-bubble-meta">{cli}{p.effort ? ` · ${p.effort}` : ""}</p>
+      <div className="t-bubble-score">
+        <span><b>{standing ? standing.points : "—"}</b><small>pts</small></span>
+        <span><b>{standing ? `${standing.wins}-${standing.losses}-${standing.draws}` : "—"}</b><small>W-L-D</small></span>
+        <span><b>{standing ? Math.round(standing.elo) : "—"}</b><small>elo</small></span>
+      </div>
+      <div className="t-bubble-foot">
+        <span>{latestDeck?.name ?? (live ? "Deck in play" : recorded ? "Deck recorded" : "Deck pending")}</span>
+        <span>{games.length ? `${games.filter((g) => g.status === "done").length}/${games.length}` : "—"}</span>
+      </div>
+    </article>
+  );
+}
+
 function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tournament, g: TGame) => void }) {
   const [t, err] = usePoll(() => getTournament(tid), [tid], (x) => x?.status === "running" && LIVE_POLL_MS);
   const [openId, setOpenId] = useState<string | null>(null);
@@ -140,6 +259,7 @@ function TournamentView({ tid, onReplay }: { tid: string; onReplay: (t: Tourname
 
   return (
     <>
+      <TournamentArena t={t} done={done} live={live.length} />
       <div className="row t-meta">
         <span className={`chip${t.status === "running" ? " ok" : ""}`}>{t.status === "running" ? "● Live" : "Finished"}</span>
         <span className="muted">{t.format} · {done}/{t.games.length} games · started {new Date(t.createdAt).toLocaleString()}</span>

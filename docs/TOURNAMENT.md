@@ -15,6 +15,25 @@ pnpm --filter @ygosim/tournament start -- --resume <tournamentId>
 
 Open the web app → **Tournament** tab to watch standings, replays and reasoning.
 
+## Six-agent Bubble Cup
+
+The requested cup uses Pi Grok 4.6 at `xhigh`, Pi GPT-6 Luna through
+`openai-codex` at `max`, Codex GPT-6.1 Sol at `medium`, Pi DeepSeek v4.1 Flash
+and GLM 5.3 Flash through Fireworks at `high`, and Antigravity Gemini 3.8 Flash
+through the native `agy` CLI at `high`. Every entrant builds a custom TCG deck.
+
+```sh
+node scripts/run-scored-cup.mjs --players pi-grok-46-xhigh,pi-luna-max,codex-sol,pi-deepseek-flash,agy-gemini-flash,pi-glm-flash
+```
+
+The launcher runs three unscored validation games covering all six entrants,
+then starts the scored 15-game round robin plus final only if validation passes.
+It uses the server at `ws://localhost:7788`, concurrency 3, and a 90-minute game
+cap by default. Override these using `--server`, `--concurrency`, and
+`--max-minutes`. Phase state and runner logs are saved under `.omx/state/` and
+`.omx/logs/`. Failed validation stops the launcher and never produces scored
+results. Keep the source unchanged between validation and scoring.
+
 ## Launch gates and costs
 
 The runner requires Linux, bubblewrap, and installed agent CLIs. `--preflight`
@@ -90,12 +109,12 @@ existing timeout/default-action behavior.
 | pi-glm-flash | GLM 5.3 Flash | pi | fireworks/accounts/fireworks/models/glm-5p3-flash | high |
 | claude-opus | Claude Opus 5.5 | claude | claude-opus-5-5 | default |
 
-`codex-luna-max` alone sets `codeMode: true`: this model needs Codex code mode
+`codex-sol` and `codex-luna-max` set `codeMode: true`: these models need Codex code mode
 to reach the ygosim MCP tools. Shell, web search, and browser tools stay disabled,
 and the Codex sandbox stays read-only, but code mode can execute code inside the
 filesystem sandbox. This is a weaker isolation guarantee for that entrant;
 the prompt instructs it to use only the game MCP tools and avoid network/file
-access attempts. Other Codex entrants keep code mode disabled, including stored
+access attempts. Codex entrants without this opt-in keep code mode disabled, including stored
 players without the field.
 
 `pi-luna-max` is an opt-in entrant: Pi, `openai-codex/gpt-6-luna`, thinking `max`.

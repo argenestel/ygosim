@@ -22,11 +22,13 @@ const DuelScreen = lazy(() => import("./duel/DuelScreen").then((m) => ({ default
 const ReplayScreen = lazy(() => import("./tournament/ReplayScreen").then((m) => ({ default: m.ReplayScreen })));
 
 type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: "duel"; launch: DuelLaunch; key: number } | { s: "tourney" } | { s: "replay"; t: Tournament; g: TGame };
+const requestedTournament = new URLSearchParams(location.search).get("tournament");
+const initialTournament = requestedTournament && /^[a-zA-Z0-9_-]+$/.test(requestedTournament) ? requestedTournament : undefined;
 
 function App() {
-  const [screen, setScreen] = useState<Screen>({ s: "home" });
+  const [screen, setScreen] = useState<Screen>(initialTournament ? { s: "tourney" } : { s: "home" });
   const [name, setName] = useState(playerName());
-  const [tourneyId, setTourneyId] = useState("board"); // survives opening a replay and coming back
+  const [tourneyId, setTourneyId] = useState(initialTournament ?? "board"); // survives opening a replay and coming back
   const [cover, setCover] = useState(() => { const p = activeProfile(); return p ? coverOf(p) : undefined; });
   useEffect(() => onDecksChanged(() => { const p = activeProfile(); setCover(p ? coverOf(p) : undefined); }), []);
   useEffect(() => { seedSampleDecks(listPresetDecks); }, []);
