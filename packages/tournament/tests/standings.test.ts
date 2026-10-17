@@ -65,7 +65,10 @@ describe("Standings computation", () => {
       ],
     };
 
+    const legacy = computeStandings(tournament);
+    tournament.games[0]!.lp = { p1: 6300, p2: 2100 };
     const standings = computeStandings(tournament);
+    expect(standings).toEqual(legacy);
     expect(standings).toHaveLength(2);
     expect(standings[0].id).toBe("p1");
     expect(standings[0].wins).toBe(1);

@@ -242,7 +242,7 @@ export class Lobby {
   }
 }
 
-function validMessage(msg: ClientMsg): boolean {
+function validMessage(msg: ClientMsg & { tournament?: { onTimeout?: "lp" | "draw" } }): boolean {
   const deck = (value: Deck) => !!value && ["main", "extra", "side"].every(key => {
     const cards = value[key as keyof Deck];
     return Array.isArray(cards) && cards.length <= 60 && cards.every(code => Number.isSafeInteger(code) && code > 0);
@@ -258,6 +258,7 @@ function validMessage(msg: ClientMsg): boolean {
       && (msg.vsAI === undefined || typeof msg.vsAI === "boolean")
       && (msg.spectateOnly === undefined || typeof msg.spectateOnly === "boolean") && level(msg.aiLevel)
       && (msg.tournament === undefined || !!msg.tournament && controlToken(msg.tournament.controlToken)
+        && (msg.tournament.onTimeout === undefined || ["lp", "draw"].includes(msg.tournament.onTimeout))
         && (msg.tournament.seed === undefined || Number.isInteger(msg.tournament.seed) && msg.tournament.seed >= 0 && msg.tournament.seed <= 0xffffffff)
         && (msg.match === undefined || msg.match === "single") && !msg.vsAI && !msg.opponent && !msg.spectateOnly)
       && (msg.opponent === undefined || !!msg.opponent && ["bot", "claude", "codex"].includes(msg.opponent.kind) && level(msg.opponent.level));

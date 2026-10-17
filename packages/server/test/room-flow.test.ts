@@ -128,3 +128,36 @@ describe("Room Flow", () => {
     expect(room.spectators.size).toBe(1);
   });
 });
+
+describe("tournament wall time adjudication", () => {
+  it.each([
+    { lp: [6300, 2100], policy: "lp", winner: 0, reason: "time-lp" },
+    { lp: [2100, 6300], policy: "lp", winner: 1, reason: "time-lp" },
+    { lp: [8000, 8000], policy: "lp", winner: null, reason: "timeout" },
+    { lp: [6300, 2100], policy: "draw", winner: null, reason: "timeout" },
+    { lp: [6300, 2100], policy: undefined, winner: null, reason: "timeout" },
+  ] as const)("adjudicates $policy with $lp", async ({ lp, policy, winner, reason }) => {
+    const streams: ServerMsg[][] = [[], [], []];
+    const participants = streams.map((messages, i) => ({ id: String(i), name: String(i), kind: "human" as const, send: (msg: ServerMsg) => messages.push(msg) }));
+    const duel = new MockDuel([sampleDeck, sampleDeck]);
+    const stateFor = duel.stateFor.bind(duel);
+    duel.stateFor = viewer => ({ ...stateFor(viewer), lp: [...lp] });
+    const token = "a".repeat(64);
+    const room = new Room(async () => duel, {}, undefined, "tcg", "single", { controlToken: token, onTimeout: policy });
+    try {
+      room.join(participants[0]!, sampleDeck); room.join(participants[1]!, sampleDeck); room.join(participants[2]!, sampleDeck);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(room.adjudicate("b".repeat(64), 1, "timeout")).toBe(false);
+      expect(room.adjudicate(token, 1, "timeout")).toBe(true);
+      await room.finished;
+      expect(room.roomMsg()).toMatchObject({ status: "done" });
+      expect(room.winner).toBe(winner);
+      for (const messages of streams) {
+        const wins = messages.flatMap(msg => msg.type === "events" ? msg.events : []).filter(event => event.t === "win");
+        expect(wins).toEqual([{ t: "win", winner, reason }]);
+        const terminal = messages.find(msg => msg.type === "events" && msg.events.some(event => event.t === "win"));
+        expect(terminal).toMatchObject({ state: { lp } });
+      }
+    } finally { await room.close(); }
+  });
+});

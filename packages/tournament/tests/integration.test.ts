@@ -12,18 +12,21 @@ import type { Game } from '../src/types.js';
 const cleanup: (() => Promise<void>)[] = [];
 afterEach(async () => { for (const close of cleanup.splice(0).reverse()) await close(); });
 
-async function setup(timeoutMs = 5000, failEngine = false) {
+async function setup(timeoutMs = 5000, failEngine = false, onTimeout?: "lp" | "draw", lp: [number, number] = [8000, 8000]) {
   const root = await mkdtemp(join(tmpdir(), 'tournament-wire-'));
   cleanup.push(() => rm(root, { recursive: true, force: true }));
   const createDuel = vi.fn(async (options: Parameters<import('../../server/src/room.js').CreateDuel>[0]) => {
     if (failEngine) throw new Error('Fixture engine unavailable');
-    return new MockDuel(options.decks, options.seed);
+    const duel = new MockDuel(options.decks, options.seed);
+    const stateFor = duel.stateFor.bind(duel);
+    duel.stateFor = viewer => ({ ...stateFor(viewer), lp });
+    return duel;
   });
   const server = await startServer({ port: 0, engine: null, createDuel, turnTimeoutMs: timeoutMs, botDelayMs: 0, tournamentDir: root });
   cleanup.push(() => server.close());
   const game: Game = { id: 'g1', stage: 'round-robin', round: 1, seats: ['a', 'b'], status: 'running', winner: null, decks: {}, stats: {}, seed: 4242 };
   const gameDir = join(root, 'games', 'g1');
-  const bridge = await createTournamentMcpServer({ game, gameDir, server: `ws://127.0.0.1:${server.port}` });
+  const bridge = await createTournamentMcpServer({ game, gameDir, onTimeout, server: `ws://127.0.0.1:${server.port}` });
   cleanup.push(() => bridge.close());
   const clients = new Map<string, Client>();
   for (const id of game.seats) {
@@ -59,6 +62,13 @@ describe('real tournament MCP and WebSocket boundaries', () => {
     const wins = (await frames()).flatMap(frame => frame.msg.events || []).filter(event => event.t === 'win');
     expect(wins).toEqual([{ t: 'win', winner: null, reason: 'timeout' }]);
     expect(JSON.stringify(await frames())).not.toContain('Private fixture choice');
+  });
+  it('passes LP policy through room creation and records the adjudicated replay winner', async () => {
+    const { bridge, enter, frames } = await setup(5000, false, 'lp', [2100, 6300]);
+    await enter(); await bridge.sessions.get('a')!.client.waitForTurn(1000);
+    expect(await bridge.adjudicate(null, 'timeout')).toEqual({ winner: 1, reason: 'time-lp' });
+    await bridge.close();
+    expect((await frames()).flatMap(frame => frame.msg.events || []).filter(event => event.t === 'win')).toEqual([{ t: 'win', winner: 1, reason: 'time-lp' }]);
   });
   it('forfeits an expired decision without silently selecting an action', async () => {
     const { bridge, enter, frames } = await setup(100);

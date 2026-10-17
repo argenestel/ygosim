@@ -61,6 +61,7 @@ export function validationResult(tournament: Tournament): NonNullable<Tournament
   const checked = new Set<string>();
   for (const game of tournament.games) {
     if (game.status !== 'done' || ['timeout', 'agent-crash', 'decision-timeout', 'invalid-actions', 'room closed', 'infrastructure-error', 'surrender'].includes(game.reason || '')) continue;
+    if (game.reason === 'time-lp' && !game.seats.every(id => game.decks[id] && game.stats[id]?.decisions > 0 && (game.stats[id]?.timedDecisions || 0) > 0)) continue;
     for (const id of game.seats) {
       const player = tournament.players.find(player => player.id === id);
       if (player && game.decks[id] && game.stats[id]?.decisions > 0 && (game.stats[id].timedDecisions || 0) > 0
@@ -80,12 +81,13 @@ export function modelMatches(player: Player, reported: string): boolean {
   return canonical === player.model || canonical === player.model.slice(player.model.indexOf('/') + 1);
 }
 
-export function requireValidation(id: string | undefined, players: Player[], audit: Pick<NonNullable<Tournament['audit']>, 'sourceHash' | 'cliVersions' | 'server' | 'node' | 'decisionTimeoutMs' | 'maxInvalid' | 'deckPolicy'>): void {
+export function requireValidation(id: string | undefined, players: Player[], audit: Pick<NonNullable<Tournament['audit']>, 'sourceHash' | 'cliVersions' | 'server' | 'node' | 'decisionTimeoutMs' | 'maxInvalid' | 'deckPolicy' | 'onTimeout'>): void {
   const validation = id ? getTournament(id) : null;
   if (!validation || validation.scored !== false || !validation.validation?.passed || !validation.audit
     || !validationResult(validation).passed
     || validation.audit.sourceHash !== audit.sourceHash || validation.audit.server !== audit.server || validation.audit.node !== audit.node
     || validation.audit.decisionTimeoutMs !== audit.decisionTimeoutMs || validation.audit.maxInvalid !== audit.maxInvalid
+    || (validation.audit.onTimeout ?? 'draw') !== (audit.onTimeout ?? 'draw')
     || (validation.deckPolicy ?? validation.audit.deckPolicy ?? 'choice') !== (audit.deckPolicy ?? 'choice')
     || players.some(player => !validation.validation?.checkedPlayers.includes(player.id)
       || !validation.players.some(prior => prior.id === player.id && prior.cli === player.cli && prior.model === player.model && prior.effort === player.effort

@@ -3,15 +3,19 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const state = vi.hoisted(() => ({ busy: new Set<string>(), overlap: false, maxActive: 0, active: 0, games: new Map<string, any>(), policies: new Map<string, string | undefined>(), behavior: 'win', playerWinner: null as string | null }));
-vi.mock('../src/mcp-server.js', () => ({ createTournamentMcpServer: vi.fn(async ({ game, deckPolicy }: any) => {
+vi.mock('../src/mcp-server.js', () => ({ createTournamentMcpServer: vi.fn(async ({ game, deckPolicy, onTimeout }: any) => {
   for (const id of game.seats) game.decks[id] = { name: 'Fixture', source: 'custom', reason: 'test', main: Array.from({ length: 40 }, (_, i) => i + 1), extra: [] };
-  const sessions = new Map(game.seats.map((id: string) => [id, { client: { ended: null, state: { turn: 3 }, connected: false, close() {} } }]));
+  const sessions = new Map(game.seats.map((id: string) => [id, { client: { ended: null, state: { turn: 3, lp: [6300, 2100] }, connected: false, close() {} } }]));
   state.games.set(game.id, sessions);
   state.policies.set(game.id, deckPolicy);
   state.active++; state.maxActive = Math.max(state.maxActive, state.active);
   for (const id of game.seats) { if (state.busy.has(id)) state.overlap = true; state.busy.add(id); }
   return { sessions, urlFor: (id: string) => `${game.id}/${id}`, authorizationFor: () => '',
-    adjudicate: async (winner: string | null, reason: string) => ({ winner: winner === null ? null : game.seats.indexOf(winner), reason }), close: async () => {
+    adjudicate: async (winner: string | null, reason: string) => {
+      const result = reason === 'timeout' && onTimeout === 'lp' ? { winner: 0, reason: 'time-lp' } : { winner: winner === null ? null : game.seats.indexOf(winner), reason };
+      for (const session of sessions.values() as Iterable<any>) session.client.ended = result;
+      return result;
+    }, close: async () => {
     state.active--; for (const id of game.seats) state.busy.delete(id);
   } };
 }) }));
@@ -36,6 +40,9 @@ afterEach(() => { vi.unstubAllEnvs(); state.busy.clear(); state.games.clear(); s
 describe('runner', () => {
   it('validates CLI input', () => {
     expect(parseOptions(['--', '--players', 'codex-sol,claude-opus', '--games', '1'])).toMatchObject({ games: 1, concurrency: 2, sampleDecks: false, customDecks: false });
+    expect(parseOptions([]).onTimeout).toBe('lp');
+    expect(parseOptions(['--on-timeout', 'draw']).onTimeout).toBe('draw');
+    expect(() => parseOptions(['--on-timeout', 'invalid'])).toThrow('--on-timeout');
     expect(parseOptions(['--players', 'codex-sol,claude-opus', '--sample-decks'])).toMatchObject({ sampleDecks: true });
     expect(parseOptions(['--players', 'codex-sol,claude-opus', '--customDecks'])).toMatchObject({ sampleDecks: false, customDecks: true });
     expect(parseOptions(['--players', 'codex-sol,claude-opus', '--custom-decks'])).toMatchObject({ sampleDecks: false, customDecks: true });
@@ -55,6 +62,7 @@ describe('runner', () => {
     try {
       const options = parseOptions(['--players', 'codex-sol,codex-luna-max,pi-grok-46,claude-opus', '--concurrency', '2']);
       const tournament = await runTournament(options);
+      expect(tournament.games[0]!.lp).toEqual(Object.fromEntries(tournament.games[0]!.seats.map((id, seat) => [id, [6300, 2100][seat]])));
       expect(tournament.status).toBe('done'); expect(tournament.games).toHaveLength(7);
       expect(tournament.games.at(-1)?.stage).toBe('final');
       expect(state.overlap).toBe(false); expect(state.maxActive).toBe(2);
@@ -91,6 +99,8 @@ describe('runner', () => {
 
       const resumed = await runTournament({ ...parseOptions(['--players', 'codex-sol,claude-opus,pi-grok-46', '--no-final']), games: undefined, resume: initial.id });
       expect(resumed.deckPolicy).toBeUndefined();
+      expect(createTournamentMcpServer).toHaveBeenLastCalledWith(expect.objectContaining({ onTimeout: 'draw' }));
+      await expect(runTournament({ ...parseOptions(['--on-timeout', 'lp']), resume: initial.id })).rejects.toThrow('Changing timeout policy');
       expect(state.policies.get(resumed.games.at(-1)!.id)).toBe('choice');
 
       const customAlias = parseOptions(['--players', 'codex-sol,claude-opus,pi-grok-46', '--custom-decks', '--no-final']);
@@ -115,13 +125,33 @@ describe('runner', () => {
     vi.stubEnv('YGOSIM_TOURNAMENT_DIR', join(root, 'tournaments'));
     state.behavior = behavior;
     try {
-      const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--no-final', '--max-minutes', '0.001']));
+      const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--no-final', '--max-minutes', '0.001', '--on-timeout', 'draw']));
       expect(result.status).toBe('done');
+      expect(result.games[0]!.lp).toEqual({ 'codex-sol': 6300, 'claude-opus': 2100 });
       expect(result.games[0]!.reason).toBe(behavior === 'wait' ? 'timeout' : 'agent-crash');
       expect(result.games[0]!.winner).toBe(behavior === 'wait' ? null : result.games[0]!.seats[1]);
       const bridge = await vi.mocked(createTournamentMcpServer).mock.results.at(-1)!.value;
       expect(bridge.adjudicate).toBeDefined();
     } finally { await rm(root, { recursive: true, force: true }); }
+  });
+  it.each(['lp', 'draw'] as const)('audits %s timeout policy and prints final LP', async policy => {
+    const root = await mkdtemp(join(tmpdir(), 'tournament-time-audit-'));
+    vi.stubEnv('YGOSIM_TOURNAMENT_DIR', join(root, 'tournaments'));
+    state.behavior = 'wait';
+    const log = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const options = parseOptions(['--players', 'codex-sol,claude-opus', '--no-final', '--max-minutes', '0.001', '--on-timeout', policy]);
+      options.audit = { revision: 'fixture', sourceHash: 'fixture', dirty: false, node: process.version, cliVersions: {}, server: options.server,
+        decisionTimeoutMs: 1000, maxInvalid: 5, seed: 1, cycles: 1, mirrored: false, onTimeout: options.onTimeout };
+      const tournament = await runTournament(options);
+      const game = tournament.games[0]!;
+      expect(tournament.audit?.onTimeout).toBe(policy);
+      const stored = JSON.parse(await readFile(join(root, 'tournaments', tournament.id, 'tournament.json'), 'utf8'));
+      expect(stored.audit.onTimeout).toBe(policy);
+      expect(game.lp).toEqual({ 'codex-sol': 6300, 'claude-opus': 2100 });
+      expect(log).toHaveBeenCalledWith(`${game.id}: done, ${policy === 'lp' ? game.seats[0] : 'draw'} (${policy === 'lp' ? 'time-lp' : 'timeout'} 6300–2100)`);
+      expect(createTournamentMcpServer).toHaveBeenLastCalledWith(expect.objectContaining({ onTimeout: policy }));
+    } finally { log.mockRestore(); await rm(root, { recursive: true, force: true }); }
   });
   it('keeps interrupted games resumable and cleans up active agents', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tournament-interrupt-'));

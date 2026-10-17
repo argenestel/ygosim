@@ -49,6 +49,7 @@ export interface Game {
   startedAt?: string;
   endedAt?: string;
   turns?: number;
+  lp?: Record<string, number>;
   decks: Record<string, DeckInfo>;
   stats: Record<string, GameStats>;
   error?: string;
@@ -79,6 +80,7 @@ export interface Tournament {
     decisionTimeoutMs: number;
     maxInvalid: number;
     maxMinutes?: number;
+    onTimeout?: "lp" | "draw";
     seed: number;
     cycles: number;
     mirrored: boolean;

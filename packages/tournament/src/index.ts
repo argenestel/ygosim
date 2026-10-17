@@ -16,6 +16,8 @@ import type { Game, Tournament } from './types.js';
 
 export interface RunnerOptions {
   name: string; players: string[]; concurrency: number; games?: number; maxMinutes: number;
+  onTimeout?: "lp" | "draw";
+  onTimeoutExplicit?: boolean;
   noFinal: boolean; resume?: string; server: string;
   validate?: boolean; preflightOnly?: boolean; validatedBy?: string;
   seed?: number; cycles?: number; mirrored?: boolean; audit?: Tournament['audit'];
@@ -28,6 +30,7 @@ export function parseOptions(argv: string[]): RunnerOptions {
   const { values } = parseArgs({ args: argv[0] === '--' ? argv.slice(1) : argv, options: {
     name: { type: 'string', default: 'Agent tournament' }, players: { type: 'string' },
     concurrency: { type: 'string', default: '2' }, games: { type: 'string' },
+    'on-timeout': { type: 'string' },
     'max-minutes': { type: 'string', default: '90' }, 'no-final': { type: 'boolean', default: false },
     resume: { type: 'string' }, server: { type: 'string', default: 'ws://localhost:7777' },
     validate: { type: 'boolean', default: false }, preflight: { type: 'boolean', default: false },
@@ -43,6 +46,7 @@ export function parseOptions(argv: string[]): RunnerOptions {
     if (!Number.isFinite(number) || number <= 0 || (integer && !Number.isInteger(number))) throw new Error(`${name} must be a positive ${integer ? 'integer' : 'number'}`);
     return number;
   };
+  if (values['on-timeout'] !== undefined && !['lp', 'draw'].includes(values['on-timeout'])) throw new Error('--on-timeout must be lp or draw');
   const players = values.players?.split(',').map(id => id.trim()) ?? ROSTER.map(p => p.id);
   if (players.length < 2 || new Set(players).size !== players.length || players.some(id => !getRosterPlayer(id))) throw new Error('Choose at least two distinct roster IDs');
   if (values['best-of'] !== undefined && (values['best-of'] !== '3' || players.length !== 2 || values.mirrored || values.cycles !== '1' || values.validate)) throw new Error('--best-of 3 requires exactly two players and cannot combine with validation, cycles or mirroring');
@@ -54,6 +58,7 @@ export function parseOptions(argv: string[]): RunnerOptions {
   if (!['ws:', 'wss:', 'http:', 'https:'].includes(server.protocol) || server.username || server.password || server.search || server.hash) throw new Error('Invalid server URL');
   return { name: values.name!, players, concurrency: positive(values.concurrency!, '--concurrency'),
     games: values.games === undefined ? undefined : positive(values.games, '--games'),
+    onTimeout: (values['on-timeout'] ?? 'lp') as 'lp' | 'draw', onTimeoutExplicit: values['on-timeout'] !== undefined,
     maxMinutes: values['max-minutes'] === '0' ? 0 : positive(values['max-minutes']!, '--max-minutes', false), noFinal: values['no-final']! || values.validate! || values['best-of'] !== undefined, resume: values.resume, server: server.toString(),
     validate: values.validate, preflightOnly: values.preflight, validatedBy: values['validated-by'], seed,
     cycles: positive(values.cycles!, '--cycles'), mirrored: values.mirrored, bestOf: values['best-of'] === '3' ? 3 : undefined,
@@ -120,7 +125,7 @@ async function playGame(tournament: Tournament, game: Game, dir: string, options
   game.winner = null; game.decks = {}; game.stats = Object.fromEntries(game.seats.map(id => [id, emptyStats()]));
   game.models = {};
   game.efforts = {};
-  delete game.error; delete game.endedAt; delete game.reason; delete game.turns;
+  delete game.error; delete game.endedAt; delete game.reason; delete game.turns; delete game.lp;
   await persist();
   let bridge: Awaited<ReturnType<typeof createTournamentMcpServer>> | undefined;
   const agents = new AbortController();
@@ -130,7 +135,7 @@ async function playGame(tournament: Tournament, game: Game, dir: string, options
   const tasks: Promise<void>[] = [];
   try {
     const customDecks = (tournament.deckPolicy ?? tournament.audit?.deckPolicy ?? 'choice') === 'custom-only';
-    bridge = await createTournamentMcpServer({ game, gameDir, server: options.server, onChange: persist, deckPolicy: customDecks ? 'custom-only' : 'choice' });
+    bridge = await createTournamentMcpServer({ game, gameDir, server: options.server, onChange: persist, deckPolicy: customDecks ? 'custom-only' : 'choice', onTimeout: tournament.audit?.onTimeout ?? (options.resume ? 'draw' : options.onTimeout ?? 'lp') });
     const current = bridge;
     const exhausted = new Set<string>();
     const deadline = options.maxMinutes === 0 ? Infinity : Date.now() + options.maxMinutes * 60_000;
@@ -181,6 +186,11 @@ async function playGame(tournament: Tournament, game: Game, dir: string, options
   } finally {
     agents.abort(); signal.removeEventListener('abort', stop);
     await Promise.allSettled(tasks);
+    if (game.status === 'done') {
+      const state = [...(bridge?.sessions.values() ?? [])].find(session => session.client.ended && session.client.state)?.client.state;
+      const finalState = state ?? [...(bridge?.sessions.values() ?? [])].find(session => session.client.state)?.client.state;
+      if (finalState) game.lp = Object.fromEntries(game.seats.map((id, seat) => [id, finalState.lp[seat]]));
+    }
     await bridge?.close();
     await persist();
   }
@@ -202,9 +212,12 @@ export async function runTournament(options: RunnerOptions, signal: AbortSignal 
       : { id, name: options.validate ? `${options.name} (unscored validation)` : options.name, createdAt: new Date().toISOString(), status: 'running', format: options.bestOf ? 'best-of-three' : 'round-robin+final',
         players: options.players.map(id => ({ ...getRosterPlayer(id)! })), games: options.bestOf ? [1, 2].map(round => seriesGame(options.players as [string, string], round, seed)) : roundRobin(options.players, { cycles: options.cycles, mirrored: options.mirrored, seed }),
         ...(options.bestOf ? { series: seriesResult(options.players, [], seed) } : {}),
-        scored: !options.validate, deckPolicy: options.audit?.deckPolicy ?? requestedDeckPolicy(options), ...(options.audit ? { audit: options.audit } : {}) };
+        scored: !options.validate, deckPolicy: options.audit?.deckPolicy ?? requestedDeckPolicy(options), ...(options.audit ? { audit: { ...options.audit, onTimeout: options.audit.onTimeout ?? options.onTimeout ?? 'lp' } } : {}) };
     if (tournament.id !== id) throw new Error('Tournament ID does not match directory');
-    if (options.resume) assertResumeDeckPolicy(options, tournament);
+    if (options.resume) {
+      assertResumeDeckPolicy(options, tournament);
+      if (options.onTimeoutExplicit && options.onTimeout !== (tournament.audit?.onTimeout ?? 'draw')) throw new Error('Changing timeout policy requires a fresh tournament and validation');
+    }
     const playerIds = new Set(tournament.players.map(player => player.id));
     if (tournament.players.some(player => !/^[a-zA-Z0-9_-]+$/.test(player.id))
       || tournament.games.some(game => !/^[a-zA-Z0-9_-]+$/.test(game.id)
@@ -262,7 +275,8 @@ export async function runTournament(options: RunnerOptions, signal: AbortSignal 
         const task = playGame(tournament, game, dir, options, persist, runSignal).finally(() => {
           if (game.status === 'error') stopOnError.abort();
           active.delete(game); for (const id of game.seats) busy.delete(id);
-          console.log(`${game.id}: ${game.status}, ${game.winner ?? 'draw'} (${game.reason ?? game.error ?? 'interrupted'})`);
+          const lp = ['time-lp', 'timeout'].includes(game.reason ?? '') && game.lp ? ` ${game.seats.map(id => game.lp![id]).join('–')}` : '';
+          console.log(`${game.id}: ${game.status}, ${game.winner ?? 'draw'} (${game.reason ?? game.error ?? 'interrupted'}${lp})`);
         });
         active.set(game, task);
       }
@@ -287,15 +301,17 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
     if (prior && options.validate && prior.scored !== false) throw new Error('--validate cannot resume a scored or historical tournament; start a separate validation run');
     if (prior?.scored === false) { options.validate = true; options.noFinal = true; }
     if (prior) assertResumeDeckPolicy(options, prior);
+    if (prior && !options.onTimeoutExplicit) options.onTimeout = prior.audit?.onTimeout ?? 'draw';
     const players = prior?.players ?? options.players.map(id => getRosterPlayer(id)!);
     const audit = await preflight(options.server, players, controller.signal);
     if (prior?.audit && (prior.audit.sourceHash !== audit.sourceHash || prior.audit.server !== audit.server || prior.audit.node !== audit.node
       || prior.audit.decisionTimeoutMs !== audit.decisionTimeoutMs || prior.audit.maxInvalid !== audit.maxInvalid
+      || (prior.audit.onTimeout ?? 'draw') !== options.onTimeout
       || prior.audit.maxMinutes !== undefined && prior.audit.maxMinutes !== options.maxMinutes
       || players.some(player => prior.audit?.cliVersions[player.cli] !== audit.cliVersions[player.cli]))) throw new Error('Tournament code or runtime changed; start a new validated tournament rather than mixing revisions');
     options.seed ??= randomInt(0x100000000);
     const policy = prior ? storedDeckPolicy(prior) : requestedDeckPolicy(options);
-    options.audit = { ...audit, seed: options.seed, cycles: options.cycles || 1, mirrored: !!options.mirrored, maxMinutes: options.maxMinutes, validatedBy: options.validatedBy, deckPolicy: policy };
+    options.audit = { ...audit, seed: options.seed, cycles: options.cycles || 1, mirrored: !!options.mirrored, maxMinutes: options.maxMinutes, onTimeout: options.onTimeout, validatedBy: options.validatedBy, deckPolicy: policy };
     const scheduled = prior ? prior.games.length : options.bestOf ? 3 : roundRobin(players.map(player => player.id), options).length;
     console.log(`Preflight passed: ${players.length} players, ${scheduled} scheduled games${options.games ? `, launch limit ${options.games}` : ''}${options.validate ? ' (unscored validation)' : ''}`);
     if (!options.preflightOnly) {

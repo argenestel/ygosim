@@ -54,6 +54,7 @@ export class Room {
   private surrendered?: PlayerIdx;
   private adjudicated?: { winner: PlayerIdx | null; reason: string };
   private tournamentControl?: Buffer;
+  private onTimeout: "lp" | "draw";
   failure?: string;
   private closed = false;
   private cancelBot?: () => void;
@@ -70,11 +71,12 @@ export class Room {
     id?: string,
     format: FormatId = "tcg",
     match: MatchType = "single",
-    tournament?: { controlToken: string }
+    tournament?: { controlToken: string; onTimeout?: "lp" | "draw" }
   ) {
     this.id = id ?? `r${++roomCounter}${Math.random().toString(36).slice(2, 6)}`;
     this.format = format;
     this.match = match;
+    this.onTimeout = tournament?.onTimeout ?? "draw";
     if (tournament) this.tournamentControl = createHash("sha256").update(tournament.controlToken).digest();
     this.opts = { turnTimeoutMs: 180_000, botDelayMs: 0, maxInvalid: 5, botRepeatLimit: 12, botDecisionLimit: 512, ...opts, seed: opts.seed ?? randomInt(2 ** 48 - 1) };
   }
@@ -204,7 +206,11 @@ export class Room {
     if (!this.tournamentControl || this.status !== "dueling" || this.adjudicated) return false;
     const candidate = createHash("sha256").update(controlToken).digest();
     if (!timingSafeEqual(candidate, this.tournamentControl)) return false;
-    this.adjudicated = { winner, reason };
+    if (reason === "timeout") {
+      const lp = this.duel?.stateFor(0).lp;
+      winner = this.onTimeout === "lp" && lp && lp[0] !== lp[1] ? (lp[0] > lp[1] ? 0 : 1) : null;
+      this.adjudicated = { winner, reason: winner === null ? "timeout" : "time-lp" };
+    } else this.adjudicated = { winner, reason };
     if (this.wait) this.wait.resolve({ promptId: this.wait.prompt.promptId, choose: [] });
     return true;
   }

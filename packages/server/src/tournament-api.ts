@@ -231,11 +231,11 @@ function mdCell(value: unknown): string {
     .replace(/([\\`*_\[\]])/g, "\\$1");
 }
 
-function readTailText(filePath: string, collapseNewlines = false): string {
+function readTailText(filePath: string, collapseNewlines = false, limit = TAIL_LIMIT): string {
   const fd = openSync(filePath, "r");
   try {
     const size = fstatSync(fd).size;
-    const length = Math.min(size, TAIL_LIMIT);
+    const length = Math.min(size, limit);
     const buf = Buffer.alloc(length);
     let bytesRead = 0;
     while (bytesRead < length) {
@@ -251,6 +251,27 @@ function readTailText(filePath: string, collapseNewlines = false): string {
   } finally {
     closeSync(fd);
   }
+}
+
+function liveState(filePath: string, startedAt?: string) {
+  try {
+    const lines = readTailText(filePath, false, 256 * 1024).split(/\r?\n/);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      let frame;
+      try { frame = JSON.parse(lines[i]!); } catch { continue; }
+      const state = frame?.msg?.state;
+      if (!state || !Number.isFinite(state.turn) || typeof state.phase !== "string"
+        || ![0, 1].includes(state.turnPlayer) || !Array.isArray(state.lp) || state.lp.length !== 2
+        || !state.lp.every((lp: unknown) => typeof lp === "number" && Number.isFinite(lp))) continue;
+      const time = typeof frame.time === "string" ? Date.parse(frame.time)
+        : typeof frame.t === "string" ? Date.parse(frame.t)
+        : typeof frame.t === "number" && Number.isFinite(frame.t) && startedAt ? Date.parse(startedAt) + frame.t : NaN;
+      if (!Number.isFinite(time)) continue;
+      return { turn: state.turn, phase: state.phase, turnPlayer: state.turnPlayer,
+        lp: [state.lp[0], state.lp[1]], at: new Date(time).toISOString() };
+    }
+  } catch { /* Replay may not exist yet. */ }
+  return undefined;
 }
 
 function delay(ms: number, signal: AbortSignal): Promise<void> {
@@ -404,7 +425,12 @@ export function buildTournamentApi(dir = tournamentDir()): TournamentApiApp {
     if (found instanceof Response) return found;
     const organizer = organizerAuthorized(c);
     const games = found.tournament.games.map(game => {
-      if (organizer || !hideLive() || game.status === "done") return game;
+      if (organizer || !hideLive() || game.status === "done") {
+        if (game.status !== "running") return game;
+        const filePath = existingFile(dir, [found.tid, "games", game.id, "replay.jsonl"]);
+        const live = filePath ? liveState(filePath, game.startedAt) : undefined;
+        return live ? { ...game, live } : game;
+      }
       const { decks, reason, error, ...publicGame } = game;
       return { ...publicGame, decks: {} };
     });

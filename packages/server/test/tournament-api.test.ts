@@ -78,6 +78,25 @@ describe("tournament API", () => {
   });
   afterEach(() => vi.unstubAllEnvs());
 
+  it("exposes only the latest board summary from a bounded replay tail", async () => {
+    const tournament = fixture();
+    tournament.games[0]!.status = "running";
+    tournament.games[0]!.startedAt = "2026-01-01T00:00:00.000Z";
+    const state = { turn: 4, phase: "main1", turnPlayer: 1, lp: [6300, 2100], hands: ["private"], decks: ["secret"] };
+    const frame = (t: number, state: unknown) => JSON.stringify({ t, msg: { type: "events", state } });
+    const { app } = seed({ tournament, replay: "x".repeat(300_000) + "\n" + frame(1000, { ...state, turn: 3 }) + "\n" + frame(2000, state) + '\n{"t":3000,"msg":{"type":"room"}}\nmalformed\n{"t":4000' });
+    const detail = await (await app.request("/api/tournaments/cup-1")).json();
+    expect(detail.games[0].live).toEqual({ turn: 4, phase: "main1", turnPlayer: 1, lp: [6300, 2100], at: "2026-01-01T00:00:02.000Z" });
+    vi.stubEnv("YGOSIM_TOURNAMENT_HIDE_LIVE", "1");
+    expect((await (await app.request("/api/tournaments/cup-1")).json()).games[0].live).toBeUndefined();
+    expect((await (await app.request("/api/tournaments/cup-1", organizerAccess())).json()).games[0].live).toBeDefined();
+  });
+  it.each([true, false])("omits live state without replay state (missing file: %s)", async skipReplay => {
+    const tournament = fixture(); tournament.games[0]!.status = "running";
+    const { app } = seed({ tournament, skipReplay });
+    expect((await (await app.request("/api/tournaments/cup-1")).json()).games[0].live).toBeUndefined();
+  });
+
   it("serves summaries, detail, logs and the computed leaderboard", async () => {
     const root = mkdtempSync(join(tmpdir(), "ygosim-tournament-api-"));
     const tournament = fixture();

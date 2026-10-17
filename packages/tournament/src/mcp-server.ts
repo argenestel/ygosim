@@ -29,6 +29,7 @@ export interface TournamentMcpServerOptions {
   /** Optional bind port for tests; defaults to an ephemeral localhost port. */
   port?: number;
   deckPolicy?: DeckPolicy;
+  onTimeout?: "lp" | "draw";
 }
 
 export interface TournamentMcpServer {
@@ -223,8 +224,9 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     return text;
   };
   const delivered = new Map<PlayerId, { promptId: string; at: number }>();
+  const tournament = { controlToken, seed: game.seed, onTimeout: options.onTimeout ?? "draw" };
   for (const playerId of playerIds) {
-    sessions.set(playerId, new Session({ baseUrl: gameServer, name: `Tournament-${game.id}-${playerId}`, tournament: { controlToken, seed: game.seed } }));
+    sessions.set(playerId, new Session({ baseUrl: gameServer, name: `Tournament-${game.id}-${playerId}`, tournament }));
     if (!game.stats[playerId]) {
       game.stats[playerId] = { decisions: 0, avgDecisionMs: 0, invalid: 0, toolCalls: 0, resumes: 0, reasonsGiven: 0 };
     }

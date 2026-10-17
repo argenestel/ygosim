@@ -46,14 +46,16 @@ An older running game server must be restarted after updating its source.
 unscored tournament with no final. With the default seven-player roster and
 single-cycle schedule, the first four games cover every player. Validation passes
 only when every selected player submits a timed decision with a registered deck
-in a naturally completed game. Forfeits, timeouts, infrastructure failures, and
+in a naturally completed game or a `time-lp` adjudication. A `time-lp` game
+qualifies only when both players registered decks and each made at least one
+timed decision. Equal-LP timeout draws, forfeits, infrastructure failures, and
 surrenders do not qualify. The console names players still missing evidence.
 Validation runs never enter the all-time leaderboard or default benchmark report.
 Those official aggregates require `scored: true`; unmarked legacy/demo records
 remain viewable by tournament ID but do not silently enter the new rankings.
 
 Scored CLI launches require `--validated-by <id>` from a passing validation with
-the same source hash, server URL and decision limits, Node version, CLI versions,
+the same source hash, server URL, decision limits and timeout policy, Node version, CLI versions,
 models, efforts, and per-player code mode settings (an omitted setting means disabled).
 Unexpected reported fallback models are rejected; dated aliases in the requested
 model family are recorded without being mistaken for another family.
@@ -71,7 +73,7 @@ seeds. The preflight summary prints the planned game count before agents start.
 
 Every new game records its engine seed and attempt number. The tournament audit
 records the source revision/hash, dirty state, Node and CLI versions, server,
-decision limits, wall-time budget, and schedule configuration; emitted model
+decision limits, wall-time budget, timeout policy (`audit.onTimeout`), and schedule configuration; emitted model
 identities are saved per game where the
 CLI exposes them. Interrupted attempts move to `attempts/<gid>/<attempt>/`, with
 their metadata and logs retained. A resume starts a fresh duel with the recorded
@@ -90,8 +92,13 @@ The non-interactive Codex runner auto-approves tools only on its per-game ygosim
 MCP endpoint, which exposes the tournament tools with a per-agent credential.
 
 Tournament rooms forfeit expired human decisions or excessive illegal wire
-actions instead of silently auto-playing. Wall timeouts are authenticated draws;
-an exhausted agent can forfeit only after both players register decks. The server
+actions instead of silently auto-playing. At the wall-time cap, `--on-timeout lp`
+(the default) awards the game to the player with more LP, with reason `time-lp`;
+equal LP remains a draw with reason `timeout`. Use `--on-timeout draw` to draw
+regardless of LP. Finished games record final LP by player ID; timeout console
+lines print the reason and LP in seat order. Adjudication uses the server state and authenticated tournament
+controls. Legacy audits without `onTimeout` mean `draw`, including for validation
+matching and resume; changing the policy requires fresh validation. An exhausted agent can forfeit only after both players register decks. The server
 broadcasts the adjudicated result to players and spectators, so the replay and
 standings agree. Engine, connection, and unsuccessful CLI failures pause the
 tournament without awarding a win. Normal non-tournament rooms retain their
@@ -178,7 +185,7 @@ pnpm --filter @ygosim/tournament start -- --players pi-grok-46,pi-luna-max --bes
   sent through the duel connection to the opponent.
 * A spectator WebSocket records the public stream as the replay.
 * Games end on duel end, a per-decision forfeit, max wall time (default 90 min →
-  authenticated draw "timeout"), or agent exhaustion after match entry. Shared
+  LP adjudication "time-lp", or equal-LP draw "timeout"; `--on-timeout draw` always draws), or agent exhaustion after match entry. Shared
   infrastructure errors remain unscored and pause further launches.
 
 ## Storage contract (`data/tournaments/`, override with `YGOSIM_TOURNAMENT_DIR`)
@@ -209,8 +216,9 @@ interface Game {
   id: string; stage: "round-robin" | "final"; round: number;
   seats: [string, string];                 // player ids, seat 0 goes first-chooser
   status: "pending" | "running" | "done" | "error";
-  winner: string | null; reason?: string;  // reason from engine, or "timeout" / "agent-crash"
+  winner: string | null; reason?: string;  // reason from engine, or "time-lp" / "timeout" / "agent-crash"
   startedAt?: string; endedAt?: string; turns?: number;
+  lp?: Record<string, number>;             // final LP by player id; absent on legacy games
   decks: Record<string, { name: string; source: "sample" | "custom"; reason: string; main: number[]; extra: number[] }>;
   stats: Record<string, { decisions: number; avgDecisionMs: number; invalid: number; toolCalls: number; resumes: number; reasonsGiven: number }>;
   error?: string;
@@ -220,7 +228,10 @@ interface Game {
 ## HTTP API (game server)
 
 * `GET /api/tournaments` → `{ id, name, createdAt, status, players, done, total }[]`
-* `GET /api/tournaments/:tid` → `Tournament & { standings: Standing[] }`
+* `GET /api/tournaments/:tid` → `Tournament & { standings: Standing[] }`; running games
+  may include `live: { turn, phase, turnPlayer, lp: [number, number], at: string }`
+  from the latest available replay state (no hands or decks). `at` is ISO time;
+  unavailable state is omitted. The wall-time cap remains public in `audit.maxMinutes`.
 * `GET /api/tournaments/:tid/games/:gid/replay` → `{ t, msg }[]`
 * `GET /api/tournaments/:tid/games/:gid/decisions/:pid?from=N` → decision rows
 * `GET /api/tournaments/:tid/games/:gid/activity/:pid?from=N` → sanitised activity
@@ -234,7 +245,7 @@ interface Game {
 Live decklists, deck-choice reasons, game reasons/errors, decisions, and activity
 are public by default, including in Markdown reports. Set
 `YGOSIM_TOURNAMENT_HIDE_LIVE=1` on the game server to restore privacy until each
-game finishes: public detail/reports omit live deck data and reasons/diagnostics,
+game finishes: public detail/reports omit live board summaries, deck data and reasons/diagnostics,
 and live decisions/activity return 403. Organizer access bypasses this setting.
 Decision fields and activity summaries filter value-shaped secrets while keeping
 natural-language strategy text (including Token monsters and board configuration).

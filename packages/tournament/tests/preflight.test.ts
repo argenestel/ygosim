@@ -32,6 +32,26 @@ describe('validation launch gates', () => {
     t.games[0].reason = 'lp'; t.games[0].stats[players[0].id].timedDecisions = 0;
     expect(validationResult(t).missingPlayers).toEqual([players[0].id]);
   });
+  it('accepts time-lp only when both players registered decks and made timed decisions', () => {
+    const t = fixture(); t.games[0].reason = 'time-lp';
+    expect(validationResult(t).passed).toBe(true);
+    t.games[0].stats[players[0].id].timedDecisions = 0;
+    expect(validationResult(t).checkedPlayers).toEqual([]);
+    t.games[0].stats[players[0].id].timedDecisions = 1;
+    delete t.games[0].decks[players[1].id];
+    expect(validationResult(t).checkedPlayers).toEqual([]);
+  });
+  it('compares timeout policy and treats legacy validation as draw', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'tournament-time-policy-')); roots.push(root);
+    vi.stubEnv('YGOSIM_TOURNAMENT_DIR', root);
+    const t = fixture(); t.validation = validationResult(t);
+    const file = join(root, t.id, 'tournament.json'); atomicWrite(file, t);
+    expect(() => requireValidation(t.id, players, { ...audit, onTimeout: 'draw' })).not.toThrow();
+    expect(() => requireValidation(t.id, players, { ...audit, onTimeout: 'lp' })).toThrow();
+    t.audit!.onTimeout = 'lp'; atomicWrite(file, t);
+    expect(() => requireValidation(t.id, players, { ...audit, onTimeout: 'lp' })).not.toThrow();
+    expect(() => requireValidation(t.id, players, audit)).toThrow();
+  });
   it('requires matching code, server, model, effort and CLI version before scoring', async () => {
     const root = await mkdtemp(join(tmpdir(), 'tournament-gate-')); roots.push(root);
     vi.stubEnv('YGOSIM_TOURNAMENT_DIR', root);
