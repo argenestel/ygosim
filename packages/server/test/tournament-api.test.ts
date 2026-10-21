@@ -1,4 +1,4 @@
-import { mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { tmpdir } from "node:os";
@@ -73,12 +73,326 @@ function seed(options: {
   return { root, dir, tournament, gameDir, app: buildTournamentApi(dir) };
 }
 
+function writeTournament(dir: string, tournament: Tournament): void {
+  atomicWrite(join(dir, tournament.id, "tournament.json"), tournament);
+  for (const game of tournament.games) mkdirSync(join(dir, tournament.id, "games", game.id), { recursive: true });
+}
+
+function providerPlayers(): Tournament["players"] {
+  return [
+    { id: "xai-player", label: "Grok", cli: "pi", model: "xai/grok-4.7" },
+    { id: "deepseek-player", label: "DeepSeek", cli: "pi", model: "fireworks/accounts/fireworks/models/deepseek-v4p1-flash" },
+    { id: "zai-player", label: "GLM", cli: "pi", model: "fireworks/accounts/fireworks/models/glm-5p3-flash" },
+    { id: "google-player", label: "Gemini", cli: "agy", model: "gemini-3.8-flash-high" },
+    { id: "anthropic-player", label: "Claude", cli: "claude", model: "claude-opus-5-5" },
+    { id: "openai-player", label: "Codex", cli: "codex", model: "gpt-6-luna" },
+  ];
+}
+
 describe("tournament API", () => {
   beforeEach(() => {
     vi.stubEnv("YGOSIM_TOURNAMENT_READ_TOKEN", undefined);
     vi.stubEnv("YGOSIM_TOURNAMENT_HIDE_LIVE", undefined);
   });
   afterEach(() => vi.unstubAllEnvs());
+
+  it("normalizes summary kind, state, progress and provider-rich player references", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ygosim-tournament-summary-"));
+    const dir = join(root, "tournaments");
+    const makeTournament = (id: string, status: Tournament["status"], scored: boolean | undefined): Tournament => {
+      const game = { ...fixture().games[0]!, id: `${id}-g1`, seats: ["xai-player", "deepseek-player"] as [string, string] };
+      const tournament = { ...fixture(), id, name: id === "validation" ? "Validation Cup (unscored validation)" : id,
+        status, players: providerPlayers(), games: [game] };
+      if (scored === undefined) delete tournament.scored;
+      else tournament.scored = scored;
+      if (id === "validation") tournament.validation = { passed: true, checkedPlayers: ["xai-player"], missingPlayers: [] };
+      if (id === "validation") tournament.games[0]!.status = "running";
+      if (id === "legacy") tournament.games[0]!.status = "error";
+      return tournament;
+    };
+    const scored = makeTournament("scored", "done", true);
+    const validation = makeTournament("validation", "running", false);
+    const legacy = makeTournament("legacy", "running", undefined);
+    writeTournament(dir, scored);
+    writeTournament(dir, validation);
+    writeTournament(dir, legacy);
+    const lock = join(dir, validation.id, ".runner-lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, `owner-${process.pid}-summary`), "");
+
+    const rows = await (await buildTournamentApi(dir).request("/api/tournaments")).json();
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "scored", name: "scored", kind: "scored", state: "finished", active: false,
+        progress: { done: 1, total: 1, live: 0, errors: 0 }, done: 1, total: 1 }),
+      expect.objectContaining({ id: "validation", name: "Validation Cup", kind: "validation", state: "live", active: true,
+        progress: { done: 0, total: 1, live: 1, errors: 0 }, done: 0, total: 1 }),
+      expect.objectContaining({ id: "legacy", name: "legacy", kind: "legacy", state: "paused", active: false,
+        progress: { done: 0, total: 1, live: 0, errors: 1 }, done: 0, total: 1 }),
+    ]));
+
+    const validationSummary = rows.find((row: { id: string }) => row.id === "validation");
+    expect(validationSummary.players).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "xai-player", provider: "xai" }),
+      expect.objectContaining({ id: "deepseek-player", provider: "deepseek", host: "Fireworks" }),
+      expect.objectContaining({ id: "zai-player", provider: "zai", host: "Fireworks" }),
+      expect.objectContaining({ id: "google-player", provider: "google" }),
+      expect.objectContaining({ id: "anthropic-player", provider: "anthropic" }),
+      expect.objectContaining({ id: "openai-player", provider: "openai" }),
+    ]));
+    const leaderboard = await (await buildTournamentApi(dir).request("/api/leaderboard")).json();
+    expect(leaderboard.players).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "xai-player", provider: "xai" }),
+      expect.objectContaining({ id: "deepseek-player", provider: "deepseek", host: "Fireworks" }),
+    ]));
+  });
+
+  it("chooses leaders by points then Elo and exposes champions only for finished tournaments", async () => {
+    const root = mkdtempSync(join(tmpdir(), "ygosim-tournament-leaders-"));
+    const dir = join(root, "tournaments");
+    const baseGame = fixture().games[0]!;
+    const game = (id: string, seats: [string, string], winner: string | null, endedAt: string, stage: "round-robin" | "final" | "series" = "round-robin") => ({
+      ...baseGame, id, stage, seats, winner, endedAt, startedAt: "2026-01-01T00:00:00.000Z", decks: {}, stats: {},
+    });
+    const players = [
+      { id: "p1", label: "One", cli: "codex" as const, model: "gpt-6" },
+      { id: "p2", label: "Two", cli: "pi" as const, model: "xai/grok" },
+      { id: "p3", label: "Three", cli: "claude" as const, model: "claude-opus" },
+    ];
+    const leaderTournament: Tournament = {
+      ...fixture(), id: "leaders", name: "Leaders", status: "done", scored: true, players,
+      games: [game("g1", ["p1", "p2"], "p1", "2026-01-01T00:01:00.000Z"), game("g2", ["p2", "p3"], "p2", "2026-01-01T00:02:00.000Z")],
+    };
+    const finalTournament: Tournament = {
+      ...fixture(), id: "final", name: "Final", status: "done", scored: true, players: players.slice(0, 2),
+      games: [game("g1", ["p1", "p2"], "p1", "2026-01-01T00:01:00.000Z"), game("g2", ["p1", "p2"], "p2", "2026-01-01T00:02:00.000Z", "final")],
+    };
+    const seriesTournament: Tournament = {
+      ...fixture(), id: "series", name: "Series", status: "done", scored: true, format: "best-of-three", players: players.slice(0, 2),
+      series: { bestOf: 3, seed: 1, wins: { p1: 1, p2: 2 }, winner: "p2", complete: true },
+      games: [game("g1", ["p1", "p2"], "p2", "2026-01-01T00:01:00.000Z", "series")],
+    };
+    const runningTournament: Tournament = {
+      ...fixture(), id: "running", name: "Running", status: "running", scored: true, players: players.slice(0, 2),
+      games: [game("g1", ["p1", "p2"], null, "2026-01-01T00:01:00.000Z")],
+    };
+    runningTournament.games[0]!.status = "running";
+    const uniqueTournament: Tournament = {
+      ...fixture(), id: "unique", name: "Unique", status: "done", scored: true, players: players.slice(0, 2),
+      games: [game("g1", ["p1", "p2"], "p1", "2026-01-01T00:01:00.000Z")],
+    };
+    for (const tournament of [leaderTournament, finalTournament, seriesTournament, runningTournament, uniqueTournament]) writeTournament(dir, tournament);
+
+    const app = buildTournamentApi(dir);
+    const leaders = await (await app.request("/api/tournaments/leaders")).json();
+    expect(leaders.leader).toMatchObject({ id: "p1", points: 3 });
+    expect(leaders.champion).toBeNull();
+    const final = await (await app.request("/api/tournaments/final")).json();
+    expect(final.champion).toBe("p2");
+    const series = await (await app.request("/api/tournaments/series")).json();
+    expect(series.champion).toBe("p2");
+    const unique = await (await app.request("/api/tournaments/unique")).json();
+    expect(unique.champion).toBe("p1");
+    const running = await (await app.request("/api/tournaments/running")).json();
+    expect(running.leader).toBeNull();
+    expect(running.champion).toBeNull();
+  });
+
+  it("returns enriched game detail with seat order, duration and concise deck titles", async () => {
+    const tournament = fixture();
+    tournament.audit = {
+      revision: "rev", sourceHash: "hash", dirty: false, node: process.version,
+      cliVersions: {}, server: "ws://localhost", decisionTimeoutMs: 1000, maxInvalid: 2,
+      maxMinutes: 90, onTimeout: "lp", seed: 1, cycles: 1, mirrored: false,
+    };
+    const game = tournament.games[0]!;
+    game.seats = ["p2", "p1"];
+    game.startedAt = "2026-01-01T00:00:00.000Z";
+    game.endedAt = "2026-01-01T00:01:00.000Z";
+    game.decks.p1 = { name: "Custom deck deadbeef", source: "custom", reason: "Dragon control: compact extra deck", main: [], extra: [] };
+    const { app } = seed({ tournament });
+
+    const detail = await (await app.request("/api/tournaments/cup-1")).json();
+    expect(detail.games[0]).toMatchObject({ durationMs: 60_000,
+      decks: { p1: { title: "Dragon control" } } });
+
+    const response = await app.request("/api/tournaments/cup-1/games/g1");
+    expect(response.status).toBe(200);
+    const gameDetail = await response.json();
+    expect(gameDetail.tournament).toMatchObject({ id: "cup-1", name: "Cup 1", kind: "scored", state: "finished", format: "round-robin+final", maxMinutes: 90, onTimeout: "lp" });
+    expect(gameDetail.players).toMatchObject([expect.objectContaining({ id: "p2" }), expect.objectContaining({ id: "p1" })]);
+    expect(gameDetail.game).toMatchObject({ id: "g1", durationMs: 60_000,
+      decks: { p1: { title: "Dragon control" } } });
+  });
+
+  it("keeps live game detail private for non-organizers when live hiding is enabled", async () => {
+    vi.stubEnv("YGOSIM_TOURNAMENT_HIDE_LIVE", "1");
+    const tournament = fixture();
+    tournament.status = "running";
+    tournament.games[0]!.status = "running";
+    const { app, dir } = seed({ tournament });
+    const lock = join(dir, tournament.id, ".runner-lock");
+    mkdirSync(lock, { recursive: true });
+    writeFileSync(join(lock, `owner-${process.pid}-privacy`), "");
+    const publicResponse = await app.request("/api/tournaments/cup-1/games/g1");
+    expect(publicResponse.status).toBe(200);
+    const publicGame = await publicResponse.json();
+    expect(publicGame.tournament.state).toBe("live");
+    expect(publicGame.game.decks).toEqual({});
+    expect(publicGame.game).not.toHaveProperty("reason");
+    expect(publicGame.game).not.toHaveProperty("error");
+    expect(publicGame.game).not.toHaveProperty("live");
+    expect((await app.request("/api/tournaments/cup-1/games/g1/timeline")).status).toBe(403);
+    expect((await app.request("/api/tournaments/cup-1/games/g1", organizerAccess())).status).toBe(200);
+  });
+
+  it("merges a safe seat timeline, supports polling cursors, and emits the terminal result once", async () => {
+    const tournament = fixture();
+    const game = tournament.games[0]!;
+    game.startedAt = "2026-01-01T00:00:00.000Z";
+    game.endedAt = "2026-01-01T00:01:00.000Z";
+    game.reason = "finished";
+    game.decks.p1 = { name: "Alpha", source: "sample", reason: "Use Alpha strategy", main: [1], extra: [] };
+    game.decks.p2 = { name: "Beta", source: "custom", reason: "TOKEN=secret", main: [2], extra: [] };
+    const p1Decisions = [
+      { t: 10, turn: 1, phase: "MAIN1", promptKind: "select_option", options: ["Summon", "Set"], optionIds: ["summon", "set"], choose: [1], reason: "Summon", ms: 4 },
+      "not-json",
+      { t: 20, promptKind: "mystery_prompt", options: ["Safe"], choose: [], reason: "Pass", ms: 5 },
+    ];
+    const p2Decisions = [
+      { t: 10, turn: 1, phase: "MAIN1", promptKind: "select_option", options: ["Pass"], optionIds: ["pass"], choose: ["pass"], reason: "Pass", ms: 6 },
+    ];
+    const p1Tools = [
+      { t: 5, tool: "enter_match", args: { main: [1], extra: [] }, ok: true, ms: 2 },
+      { t: 12, tool: "card_info", args: { query: "Blue-Eyes" }, ok: true, ms: 3 },
+      { t: 13, tool: "card_info", args: { query: "Bearer abcdefghijklmnopqrstuvwxyz123456" }, ok: true, ms: 1 },
+    ];
+    const p2Tools = [
+      { t: 6, tool: "enter_match", args: { main: [2], extra: [] }, ok: false, ms: 2 },
+    ];
+    const { app, gameDir } = seed({
+      tournament,
+      decisions: p1Decisions.map(row => typeof row === "string" ? row : JSON.stringify(row)).join("\n") + "\n",
+      tools: p1Tools.map(row => JSON.stringify(row)).join("\n") + "\n",
+    });
+    writeFileSync(join(gameDir, "p2.decisions.jsonl"), p2Decisions.map(row => JSON.stringify(row)).join("\n") + "\n");
+    writeFileSync(join(gameDir, "p2.tools.jsonl"), p2Tools.map(row => JSON.stringify(row)).join("\n") + "\n");
+
+    const firstResponse = await app.request("/api/tournaments/cup-1/games/g1/timeline?include=tools");
+    expect(firstResponse.status).toBe(200);
+    const first = await firstResponse.json();
+    expect(first.final).toBe(true);
+    const eventTimes = first.events.map((event: Record<string, unknown>) => Number(event.at));
+    expect(eventTimes).toEqual([...eventTimes].sort((a, b) => a - b));
+    expect(first.events.every((event: Record<string, unknown>) => !("resultPreview" in event))).toBe(true);
+    expect(first.events.filter((event: Record<string, unknown>) => event.type === "tool")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ at: 12, seat: 0, tool: "card_info", summary: "Blue-Eyes" }),
+    ]));
+    expect(first.events.find((event: Record<string, unknown>) => event.type === "tool" && event.at === 13)).toBeUndefined();
+    const decisions = first.events.filter((event: Record<string, unknown>) => event.type === "decision");
+    expect(decisions.filter((event: Record<string, unknown>) => event.at === 10).map((event: Record<string, unknown>) => event.seat)).toEqual([0, 1]);
+    expect(decisions).toEqual(expect.arrayContaining([
+      expect.objectContaining({ at: 10, seat: 0, choice: ["Summon"], prompt: { kind: "select_option", label: "Choose an effect" } }),
+      expect.objectContaining({ at: 10, seat: 1, choice: ["Pass"] }),
+      expect.objectContaining({ at: 20, seat: 0, choice: ["Pass"], prompt: { kind: "mystery_prompt", label: "mystery prompt" } }),
+    ]));
+    expect(decisions.find((event: Record<string, unknown>) => event.at === 10 && event.seat === 0)).toBeTruthy();
+    expect(first.events.find((event: Record<string, unknown>) => event.type === "deck" && event.seat === 0)).toMatchObject({ at: 5, title: "Alpha", reason: "Use Alpha strategy" });
+    expect(first.events.find((event: Record<string, unknown>) => event.type === "deck" && event.seat === 1)).toMatchObject({ at: 0, title: "Beta", reason: "" });
+    expect(first.events.filter((event: Record<string, unknown>) => event.type === "result")).toEqual([
+      expect.objectContaining({ at: 60_000, winner: "p1", reason: "finished" }),
+    ]);
+
+    const decoded = JSON.parse(Buffer.from(first.cursor, "base64url").toString("utf8")) as Record<string, unknown>;
+    expect(decoded).toMatchObject({ v: 1, tid: "cup-1", gid: "g1", decisions: [3, 1], tools: [3, 1], decks: [true, true], result: true, lastAt: 60_000 });
+    const empty = await (await app.request(`/api/tournaments/cup-1/games/g1/timeline?include=tools&cursor=${first.cursor}`)).json();
+    expect(empty.events).toEqual([]);
+    expect(empty.final).toBe(true);
+
+    appendFileSync(join(gameDir, "p1.decisions.jsonl"), `${JSON.stringify({ t: 30, promptKind: "select_option", options: ["Draw"], choose: [4] })}\n`);
+    appendFileSync(join(gameDir, "p1.tools.jsonl"), `${JSON.stringify({ t: 31, tool: "card_info", args: { query: "Dark Magician" }, ok: true, ms: 1 })}\n`);
+    const appended = await (await app.request(`/api/tournaments/cup-1/games/g1/timeline?include=tools&cursor=${empty.cursor}`)).json();
+    expect(appended.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "decision", at: 30, choice: ["4"] }),
+      expect.objectContaining({ type: "tool", at: 31, summary: "Dark Magician" }),
+    ]));
+    expect(appended.events).not.toEqual(expect.arrayContaining([expect.objectContaining({ type: "result" })]));
+
+    writeFileSync(join(gameDir, "p1.decisions.jsonl"), `${JSON.stringify({ t: 40, promptKind: "select_option", options: ["Draw"], choose: [1] })}\n`);
+    writeFileSync(join(gameDir, "p1.tools.jsonl"), `${JSON.stringify({ t: 41, tool: "card_info", args: { query: "Red-Eyes" }, ok: true, ms: 1 })}\n`);
+    const reset = await (await app.request(`/api/tournaments/cup-1/games/g1/timeline?include=tools&cursor=${appended.cursor}`)).json();
+    expect(reset.events).toEqual(expect.arrayContaining([
+      expect.objectContaining({ type: "decision", at: 40 }),
+      expect.objectContaining({ type: "tool", at: 41 }),
+    ]));
+    expect((await app.request("/api/tournaments/cup-1/games/g1/timeline?cursor=not-a-cursor")).status).toBe(400);
+  });
+
+  it("uses relative epoch timestamps, human prompt labels, and terminal final flags", async () => {
+    const tournament = fixture();
+    const game = tournament.games[0]!;
+    game.startedAt = "2026-01-01T00:00:00.000Z";
+    game.endedAt = "2026-01-01T00:00:10.000Z";
+    const start = Date.parse(game.startedAt);
+    const decisions = [
+      { t: start + 5, promptKind: "idle", options: ["Go"], choose: [1] },
+      { t: start + 6, promptKind: "battle_idle", options: ["Attack"], choose: [1] },
+      { t: start + 7, promptKind: "select_chain", options: ["Chain"], choose: [1] },
+      { t: start + 8, promptKind: "unknown_kind", options: ["Fallback"], choose: [1] },
+    ];
+    const { app } = seed({ tournament, decisions: decisions.map(row => JSON.stringify(row)).join("\n") + "\n" });
+    const body = await (await app.request("/api/tournaments/cup-1/games/g1/timeline")).json();
+    expect(body.final).toBe(true);
+    expect(body.events.filter((event: Record<string, unknown>) => event.type === "tool")).toEqual([]);
+    expect(body.events.filter((event: Record<string, unknown>) => event.type === "decision")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ at: 5, prompt: { kind: "idle", label: "Main phase" } }),
+      expect.objectContaining({ at: 6, prompt: { kind: "battle_idle", label: "Battle phase" } }),
+      expect.objectContaining({ at: 7, prompt: { kind: "select_chain", label: "Chain response" } }),
+      expect.objectContaining({ at: 8, prompt: { kind: "unknown_kind", label: "unknown kind" } }),
+    ]));
+
+    const pendingTournament = fixture();
+    pendingTournament.games[0]!.status = "pending";
+    const pending = seed({ tournament: pendingTournament });
+    expect((await (await pending.app.request("/api/tournaments/cup-1/games/g1/timeline")).json()).final).toBe(false);
+    const errorTournament = fixture();
+    errorTournament.games[0]!.status = "error";
+    const error = seed({ tournament: errorTournament });
+    expect((await (await error.app.request("/api/tournaments/cup-1/games/g1/timeline")).json()).final).toBe(true);
+  });
+
+  it("removes persisted live state from hidden game resources", async () => {
+    vi.stubEnv("YGOSIM_TOURNAMENT_HIDE_LIVE", "1");
+    const tournament = fixture();
+    tournament.games[0]!.status = "running";
+    Object.assign(tournament.games[0]!, { live: { turn: 9, phase: "private", lp: [100, 200] } });
+    const { app } = seed({ tournament });
+    const detail = await (await app.request("/api/tournaments/cup-1")).json();
+    const match = await (await app.request("/api/tournaments/cup-1/games/g1")).json();
+    expect(detail.games[0]).not.toHaveProperty("live");
+    expect(match.game).not.toHaveProperty("live");
+  });
+
+  it("uses current source times for a result after logs restart", async () => {
+    const tournament = fixture();
+    tournament.status = "running";
+    const game = tournament.games[0]!;
+    game.status = "running";
+    game.decks = {};
+    delete game.endedAt;
+    const { app, dir, gameDir } = seed({ tournament, decisions: `${JSON.stringify({ t: 200, promptKind: "idle", choose: [], reason: "old attempt" })}\n`, tools: "" });
+    writeFileSync(join(gameDir, "p2.decisions.jsonl"), `${JSON.stringify({ t: 50, promptKind: "idle", choose: [] })}\n`);
+    const first = await (await app.request("/api/tournaments/cup-1/games/g1/timeline")).json();
+    expect(first.final).toBe(false);
+    writeFileSync(join(gameDir, "p1.decisions.jsonl"), `${JSON.stringify({ t: 10, promptKind: "idle", choose: [] })}\n`);
+    game.status = "done";
+    writeTournament(dir, tournament);
+    const second = await (await app.request(`/api/tournaments/cup-1/games/g1/timeline?cursor=${first.cursor}`)).json();
+    expect(second.events).toEqual([
+      expect.objectContaining({ type: "decision", at: 10, seat: 0 }),
+      expect.objectContaining({ type: "result", at: 50 }),
+    ]);
+    expect(second.final).toBe(true);
+  });
 
   it("derives activity from a live lock owner and ignores stale locks", async () => {
     const tournament = fixture(); tournament.status = "running"; tournament.paused = true;
@@ -149,7 +463,7 @@ describe("tournament API", () => {
     const app = buildApi(new Lobby(async () => { throw new Error("unused"); }), () => null, () => null, async () => null, undefined, undefined, dir);
     const list = await app.request("/api/tournaments");
     expect(list.status).toBe(200);
-    expect(await list.json()).toEqual([{
+    expect(await list.json()).toMatchObject([{
       id: "cup-1", name: "Cup 1", createdAt: "2026-01-01T00:00:00.000Z", status: "done",
       active: false, paused: false,
       players: tournament.players, done: 1, total: 1,
@@ -171,7 +485,7 @@ describe("tournament API", () => {
     tournament.games[0]!.reason = "Board configuration";
     tournament.games[0]!.error = "Retry needed";
     const { app } = seed({ tournament });
-    expect((await (await app.request("/api/tournaments/cup-1")).json()).games).toEqual(tournament.games);
+    expect((await (await app.request("/api/tournaments/cup-1")).json()).games).toMatchObject(tournament.games);
     expect(await (await app.request("/api/tournaments/cup-1/games/g1/decisions/p1")).json()).toEqual([{ t: 2, reason: "play" }]);
     expect((await app.request("/api/tournaments/cup-1/games/g1/activity/p1")).status).toBe(200);
     expect(await (await app.request("/api/tournaments/cup-1/report.md")).text()).toContain("p1: Alpha — r");
@@ -417,7 +731,7 @@ describe("tournament API", () => {
     expect(detail.games[0]).not.toHaveProperty("reason");
     expect(detail.games[0]).not.toHaveProperty("error");
     expect(JSON.stringify(detail)).not.toMatch(/LIVE_|Live Alpha|Live Beta|24680135|13580246|86420975|57902468/);
-    expect(detail.games[1]).toEqual(completed);
+    expect(detail.games[1]).toMatchObject(completed);
     expect(detail.standings[0]).toMatchObject({ id: "p1", wins: 1, points: 3 });
 
     const report = await app.request("/api/tournaments/cup-1/report.md");
@@ -480,7 +794,7 @@ describe("tournament API", () => {
     const detail = await app.request("/api/tournaments/cup-1", access);
     expect(detail.status).toBe(200);
     expect(detail.headers.get("cache-control")).toBe("no-store");
-    expect((await detail.json()).games).toEqual(tournament.games);
+    expect((await detail.json()).games).toMatchObject(tournament.games);
     const activity = await app.request("/api/tournaments/cup-1/games/g1/activity/p1", access);
     expect(activity.status).toBe(200);
     expect(await activity.json()).toEqual([{ t: 3, tool: "act", ok: true, ms: 4, summary: "No option labels available" }]);
@@ -566,6 +880,9 @@ describe("tournament API", () => {
     expect(await (await app.request("/api/tournaments/cup-1/games/g1/decisions/p1")).json()).toEqual([]);
     expect((await app.request("/api/tournaments/cup-1/games/g1/transcript/p1", access)).status).toBe(404);
     expect((await app.request("/api/tournaments/cup-1/games/g1/stderr/p1", access)).status).toBe(404);
+    const timeline = await app.request("/api/tournaments/cup-1/games/g1/timeline?include=tools", access);
+    expect(timeline.status).toBe(200);
+    expect(JSON.stringify(await timeline.json())).not.toContain("PRIVATE_LOG");
   });
 
   it("escapes Markdown and HTML data consistently in every report section", async () => {

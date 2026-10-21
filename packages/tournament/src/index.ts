@@ -12,6 +12,9 @@ import { runAgent } from './agent-process.js';
 import { agentPrompt } from './agent-prompt.js';
 import { acquireLock } from './lock.js';
 import { modelMatches, preflight, requireValidation, validationResult } from './preflight.js';
+export { deckTitle, normalizeDeckName, providerInfo } from './providers.js';
+export type { ProviderInfo, ProviderKey, ProviderParts } from './providers.js';
+export type { Leader, PlayerRef, Progress, Provider, TournamentKind, TournamentState } from './types.js';
 import type { Game, Tournament } from './types.js';
 
 export interface RunnerOptions {
@@ -210,7 +213,7 @@ export async function runTournament(options: RunnerOptions, signal: AbortSignal 
   try {
     tournament = options.resume
       ? JSON.parse(await readFile(join(dir, 'tournament.json'), 'utf8')) as Tournament
-      : { id, name: options.validate ? `${options.name} (unscored validation)` : options.name, createdAt: new Date().toISOString(), status: 'running', format: options.bestOf ? 'best-of-three' : 'round-robin+final',
+      : { id, name: options.name, createdAt: new Date().toISOString(), status: 'running', format: options.bestOf ? 'best-of-three' : 'round-robin+final',
         players: options.players.map(id => ({ ...getRosterPlayer(id)! })), games: options.bestOf ? [1, 2].map(round => seriesGame(options.players as [string, string], round, seed)) : roundRobin(options.players, { cycles: options.cycles, mirrored: options.mirrored, seed }),
         ...(options.bestOf ? { series: seriesResult(options.players, [], seed) } : {}),
         scored: !options.validate, deckPolicy: options.audit?.deckPolicy ?? requestedDeckPolicy(options), ...(options.audit ? { audit: { ...options.audit, onTimeout: options.audit.onTimeout ?? options.onTimeout ?? 'lp' } } : {}) };

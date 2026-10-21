@@ -4,18 +4,42 @@ import { stream } from "hono/streaming";
 import { timingSafeEqual } from "node:crypto";
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync, readSync, realpathSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
+import { providerInfo, deckTitle } from "@ygosim/tournament/providers";
 import { computeStandings } from "@ygosim/tournament/standings";
 import {
   getDecisions,
   getLeaderboard,
   getTournament,
   isTournamentActive,
-  listTournaments,
+  readTournaments,
   tournamentDir,
 } from "@ygosim/tournament/storage";
 import type { Game, Standing, Tournament } from "@ygosim/tournament/types";
 
 type TournamentApiApp = Hono;
+
+const API_ENDPOINTS = [
+  ["/api/tournaments", "Tournament summaries, progress and leaders"],
+  ["/api/tournaments/:tid", "Tournament details and standings"],
+  ["/api/tournaments/:tid/games/:gid", "Game details and seated players"],
+  ["/api/tournaments/:tid/games/:gid/timeline", "Merged decisions, decks, optional tools and result"],
+  ["/api/leaderboard", "All-time scored standings"],
+  ["/api/leaderboard.csv", "Standings as CSV"],
+  ["/api/tournaments/:tid/report.md", "Tournament report"],
+  ["/api/tournaments/:tid/events", "Tournament change notifications (SSE)"],
+  ["/api/tournaments/:tid/games/:gid/replay", "Replay frames"],
+  ["/api/tournaments/:tid/games/:gid/decisions/:pid", "Low-level seat decisions"],
+  ["/api/tournaments/:tid/games/:gid/activity/:pid", "Low-level sanitised seat activity"],
+  ["/api/tournaments/:tid/games/:gid/tools/:pid", "Organizer raw tool log"],
+  ["/api/tournaments/:tid/games/:gid/transcript/:pid", "Organizer transcript"],
+  ["/api/tournaments/:tid/games/:gid/stderr/:pid", "Organizer stderr"],
+  ["/api/health", "Server health"],
+  ["/api/ready", "Engine and card database readiness"],
+  ["/api/tournament-capabilities", "Tournament runner capabilities"],
+  ["/api/cards", "Search cards"],
+  ["/api/cards/:code", "Card details"],
+  ["/api/rooms", "List rooms"],
+].map(([path, description]) => ({ method: "GET", path, description }));
 
 const TAIL_LIMIT = 512 * 1024;
 const SSE_POLL_MS = 2000;
@@ -325,6 +349,158 @@ function lookupPlayer(c: Context, dir: string): { tid: string; gid: string; pid:
   return { tid, gid, pid, tournament, game };
 }
 
+function tournamentFacts(tournament: Tournament, dir: string) {
+  const active = isTournamentActive(tournament.id, dir);
+  const kind = tournament.scored === true ? "scored" : tournament.scored === false ? "validation" : "legacy";
+  const state = tournament.status === "done" ? "finished" : active ? "live" : "paused";
+  const done = tournament.games.filter(game => game.status === "done").length;
+  const standings = computeStandings(tournament);
+  const top = standings[0];
+  const leader = done && top ? { id: top.id, label: top.label, points: top.points, wins: top.wins, losses: top.losses, draws: top.draws } : null;
+  const final = tournament.games.find(game => game.stage === "final" && game.status === "done" && game.winner);
+  const champion = state !== "finished" ? null : final?.winner ?? tournament.series?.winner
+    ?? (done && top && (!standings[1] || top.points > standings[1].points) ? top.id : null);
+  return { name: tournament.name.replace(/ \(unscored validation\)$/, ""), kind, state, active,
+    format: tournament.format, progress: { done, total: tournament.games.length,
+      live: state === "live" ? tournament.games.filter(game => game.status === "running").length : 0,
+      errors: tournament.games.filter(game => game.status === "error").length }, leader, champion,
+    players: tournament.players.map(player => ({ ...player, ...providerInfo(player) })) };
+}
+
+function durationMs(game: Game): number | undefined {
+  const duration = game.startedAt && game.endedAt ? Date.parse(game.endedAt) - Date.parse(game.startedAt) : NaN;
+  return Number.isFinite(duration) ? duration : undefined;
+}
+
+function visibleGame(game: Game, tid: string, dir: string, organizer: boolean) {
+  const duration = durationMs(game);
+  const timing = duration === undefined ? {} : { durationMs: duration };
+  if (!organizer && hideLive() && game.status !== "done") {
+    const { decks, reason, error, live, ...publicGame } = game as Game & { live?: unknown };
+    return { ...publicGame, ...timing, decks: {} };
+  }
+  const decks = Object.fromEntries(Object.entries(game.decks ?? {}).map(([pid, deck]) => [pid, { ...deck, title: deckTitle(deck) }]));
+  const filePath = game.status === "running" ? existingFile(dir, [tid, "games", game.id, "replay.jsonl"]) : undefined;
+  const live = filePath ? liveState(filePath, game.startedAt) : undefined;
+  return { ...game, ...timing, decks, ...(live ? { live } : {}) };
+}
+
+const PROMPT_LABELS: Record<string, string> = {
+  idle: "Main phase", battle_idle: "Battle phase", select_chain: "Chain response", select_effect_yn: "Activate effect?",
+  select_yesno: "Yes / No", select_option: "Choose an effect", select_card: "Select cards", select_position: "Battle position",
+  select_place: "Choose a zone", select_tribute: "Choose tributes", select_counter: "Remove counters", select_sum: "Select by level",
+  announce: "Declare", rps: "Rock-paper-scissors", first_turn: "Go first?",
+};
+interface TimelineCursor {
+  v: 1; tid: string; gid: string; decisions: [number, number]; tools: [number, number]; decks: [boolean, boolean]; result: boolean; lastAt: number;
+  decisionBytes: [number, number]; toolBytes: [number, number];
+}
+function timelineCursor(value: string | undefined, tid: string, gid: string): TimelineCursor {
+  if (value === undefined) return { v: 1, tid, gid, decisions: [0, 0], tools: [0, 0], decks: [false, false], result: false, lastAt: 0, decisionBytes: [0, 0], toolBytes: [0, 0] };
+  if (!/^[A-Za-z0-9_-]+$/.test(value) || value.length > 4096) throw new Error("invalid cursor");
+  const decoded = Buffer.from(value, "base64url");
+  if (decoded.toString("base64url") !== value) throw new Error("invalid cursor");
+  const cursor = JSON.parse(decoded.toString("utf8")) as TimelineCursor;
+  const offsets = (values: unknown) => Array.isArray(values) && values.length === 2
+    && values.every(value => Number.isSafeInteger(value) && value >= 0);
+  if (!cursor || cursor.v !== 1 || cursor.tid !== tid || cursor.gid !== gid || !offsets(cursor.decisions) || !offsets(cursor.tools)
+    || !offsets(cursor.decisionBytes) || !offsets(cursor.toolBytes)
+    || !Array.isArray(cursor.decks) || cursor.decks.length !== 2 || !cursor.decks.every(value => typeof value === "boolean")
+    || typeof cursor.result !== "boolean" || !Number.isFinite(cursor.lastAt)) throw new Error("invalid cursor");
+  return cursor;
+}
+
+/** Keep physical row positions, including malformed or private rows, for polling. */
+function timelineRows(filePath: string | undefined): { rows: unknown[]; bytes: number } {
+  if (!filePath) return { rows: [], bytes: 0 };
+  try {
+    const text = readFileSync(filePath, "utf8");
+    const lines = text.split(/\r?\n/);
+    const rows: unknown[] = [];
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i]!;
+      if (i === lines.length - 1 && !line) break;
+      try { rows.push(JSON.parse(line)); }
+      catch { if (i < lines.length - 1) rows.push(undefined); }
+    }
+    return { rows, bytes: Buffer.byteLength(text) };
+  } catch { return { rows: [], bytes: 0 }; }
+}
+function relativeTime(t: unknown, game: Game): number {
+  if (typeof t !== "number" || !Number.isFinite(t)) return 0;
+  const start = game.startedAt ? Date.parse(game.startedAt) : NaN;
+  return t > 1e12 && Number.isFinite(start) ? t - start : t;
+}
+
+function gameTimeline(c: Context, dir: string, found: { tid: string; gid: string; game: Game }) {
+  const { tid, gid, game } = found;
+  if (!organizerAuthorized(c) && hideLive() && game.status !== "done") return organizerRequired(c);
+  let cursor: TimelineCursor;
+  try { cursor = timelineCursor(c.req.query("cursor"), tid, gid); }
+  catch { return c.json({ error: "invalid cursor" }, 400); }
+  const events: Record<string, unknown>[] = [];
+  let shrunk = false, sourceLastAt = 0;
+  const includeTools = c.req.query("include")?.split(",").includes("tools") === true;
+  for (const seat of [0, 1] as const) {
+    const player = game.seats[seat];
+    const decisionFile = timelineRows(existingFile(dir, [tid, "games", gid, `${player}.decisions.jsonl`]));
+    const toolFile = timelineRows(existingFile(dir, [tid, "games", gid, `${player}.tools.jsonl`]));
+    const decisions = decisionFile.rows, tools = toolFile.rows;
+    if (cursor.decisions[seat] > decisions.length || decisionFile.bytes < cursor.decisionBytes[seat]) { cursor.decisions[seat] = 0; shrunk = true; }
+    if (cursor.tools[seat] > tools.length || toolFile.bytes < cursor.toolBytes[seat]) { cursor.tools[seat] = 0; shrunk = true; }
+    cursor.decisionBytes[seat] = decisionFile.bytes;
+    // Only advance tool metadata when tools are served; an omitted include must not hide a restart.
+    if (includeTools) cursor.toolBytes[seat] = toolFile.bytes;
+    const deck = game.decks?.[player];
+    const safeDecisions = publicDecisions(decisions);
+    const activity = publicActivity(tools.slice(0, includeTools ? tools.length : cursor.tools[seat]), safeDecisions, deck);
+    for (const row of [...safeDecisions, ...activity]) sourceLastAt = Math.max(sourceLastAt, relativeTime(row.t, game));
+    const enter = deck ? tools.find(row => row && typeof row === "object" && (row as Record<string, unknown>).tool === "enter_match"
+        && (row as Record<string, unknown>).ok === true) as Record<string, unknown> | undefined : undefined;
+    if (deck) sourceLastAt = Math.max(sourceLastAt, relativeTime(enter?.t, game));
+    if (deck && !cursor.decks[seat]) {
+      const title = deckTitle(deck);
+      events.push({ type: "deck", at: relativeTime(enter?.t, game), seat, player,
+        title: safeDecisionText(title) ? title : "Deck", size: { main: deck.main.length, extra: deck.extra.length, side: deck.side?.length ?? 0 },
+        reason: safeDecisionText(deck.reason) ? deck.reason : "" });
+      cursor.decks[seat] = true;
+    }
+    for (const row of publicDecisions(decisions.slice(cursor.decisions[seat]))) {
+      // A private-only or incomplete row has no public decision to describe.
+      if (typeof row.t !== "number") continue;
+      const options = Array.isArray(row.options) ? row.options : [];
+      const ids = Array.isArray(row.optionIds) ? row.optionIds : [];
+      const choices = Array.isArray(row.choose) ? row.choose : [];
+      const kind = typeof row.promptKind === "string" ? row.promptKind : "unknown";
+      events.push({ type: "decision", at: relativeTime(row.t, game), seat, player,
+        ...(row.turn === undefined ? {} : { turn: row.turn }), ...(row.phase === undefined ? {} : { phase: row.phase }),
+        prompt: { kind, label: Object.hasOwn(PROMPT_LABELS, kind) ? PROMPT_LABELS[kind] : kind.replaceAll("_", " ") },
+        choice: choices.length ? choices.map(choice => {
+          const index = typeof choice === "number" ? choice - 1 : ids.indexOf(choice);
+          return String(options[index] ?? choice);
+        }) : ["Pass"], ...(row.reason === undefined ? {} : { reason: row.reason }), ...(row.ms === undefined ? {} : { thinkMs: row.ms }) });
+    }
+    cursor.decisions[seat] = decisions.length;
+    if (includeTools) {
+      for (const row of publicActivity(tools.slice(cursor.tools[seat]), safeDecisions, deck)) {
+        const { t, ...activity } = row;
+        events.push({ type: "tool", at: relativeTime(t, game), seat, player, ...activity });
+      }
+      cursor.tools[seat] = tools.length;
+    }
+  }
+  events.sort((a, b) => Number(a.at) - Number(b.at) || Number(a.seat ?? 2) - Number(b.seat ?? 2));
+  cursor.lastAt = shrunk ? sourceLastAt : Math.max(cursor.lastAt, sourceLastAt);
+  if (game.status === "done" && !cursor.result) {
+    events.push({ type: "result", at: durationMs(game) ?? cursor.lastAt, winner: game.winner,
+      reason: safeDecisionText(game.reason) ? game.reason : "", ...(game.lp ? { lp: game.lp } : {}), ...(game.turns === undefined ? {} : { turns: game.turns }) });
+    cursor.result = true;
+    cursor.lastAt = Math.max(cursor.lastAt, durationMs(game) ?? cursor.lastAt);
+    events.sort((a, b) => Number(a.at) - Number(b.at) || Number(a.seat ?? 2) - Number(b.seat ?? 2));
+  }
+  return c.json({ events, cursor: Buffer.from(JSON.stringify(cursor)).toString("base64url"), final: game.status !== "running" && game.status !== "pending" });
+}
+
 function tournamentReport(tournament: Tournament, organizer: boolean): string {
   const standings = computeStandings(tournament);
   const standingHeaders = ["id", "label", "model", "elo", "played", "wins", "losses", "draws", "points", "winRate"] as const;
@@ -419,23 +595,36 @@ export function buildTournamentApi(dir = tournamentDir()): TournamentApiApp {
     await next();
   });
 
-  app.get("/api/tournaments", (c) => c.json(listTournaments(dir)));
+  app.get("/api", c => c.json({ name: "ygosim API", endpoints: API_ENDPOINTS }));
 
-  app.get("/api/tournaments/:tid", (c) => {
+  app.get("/api/tournaments", c => c.json(readTournaments(dir).map(tournament => {
+    const facts = tournamentFacts(tournament, dir);
+    return { id: tournament.id, createdAt: tournament.createdAt, status: tournament.status, paused: tournament.paused === true,
+      ...facts, done: facts.progress.done, total: facts.progress.total };
+  })));
+
+  app.get("/api/tournaments/:tid", c => {
     const found = lookupTournament(c, dir);
     if (found instanceof Response) return found;
-    const organizer = organizerAuthorized(c);
-    const games = found.tournament.games.map(game => {
-      if (organizer || !hideLive() || game.status === "done") {
-        if (game.status !== "running") return game;
-        const filePath = existingFile(dir, [found.tid, "games", game.id, "replay.jsonl"]);
-        const live = filePath ? liveState(filePath, game.startedAt) : undefined;
-        return live ? { ...game, live } : game;
-      }
-      const { decks, reason, error, ...publicGame } = game;
-      return { ...publicGame, decks: {} };
-    });
-    return c.json({ ...found.tournament, active: isTournamentActive(found.tid, dir), games, standings: computeStandings(found.tournament) });
+    return c.json({ ...found.tournament, ...tournamentFacts(found.tournament, dir),
+      games: found.tournament.games.map(game => visibleGame(game, found.tid, dir, organizerAuthorized(c))),
+      standings: computeStandings(found.tournament) });
+  });
+
+  app.get("/api/tournaments/:tid/games/:gid", c => {
+    const found = lookupGame(c, dir);
+    if (found instanceof Response) return found;
+    const { name, kind, state, format, players } = tournamentFacts(found.tournament, dir);
+    const { maxMinutes, onTimeout } = found.tournament.audit ?? {};
+    return c.json({ tournament: { id: found.tid, name, kind, state, format,
+      ...(maxMinutes === undefined ? {} : { maxMinutes }), ...(onTimeout === undefined ? {} : { onTimeout }) },
+      players: found.game.seats.map(id => players.find(player => player.id === id)),
+      game: visibleGame(found.game, found.tid, dir, organizerAuthorized(c)) });
+  });
+
+  app.get("/api/tournaments/:tid/games/:gid/timeline", c => {
+    const found = lookupGame(c, dir);
+    return found instanceof Response ? found : gameTimeline(c, dir, found);
   });
 
   app.get("/api/tournaments/:tid/games/:gid/replay", (c) => {
@@ -508,7 +697,10 @@ export function buildTournamentApi(dir = tournamentDir()): TournamentApiApp {
     }
   });
 
-  app.get("/api/leaderboard", (c) => c.json(getLeaderboard(dir)));
+  app.get("/api/leaderboard", c => {
+    const board = getLeaderboard(dir);
+    return c.json({ ...board, players: board.players.map(player => ({ ...player, ...providerInfo(player) })) });
+  });
 
   app.get("/api/leaderboard.csv", (c) => {
     const board = getLeaderboard(dir);

@@ -12,6 +12,7 @@ import { GameClient } from "@ygosim/mcp/client";
 import type { ServerMsg } from "@ygosim/protocol";
 import type { DeckPolicy, Game } from "./types.js";
 import { deckFingerprint, saveDeckArtifacts } from "./deck-artifacts.js";
+import { normalizeDeckName } from "./providers.js";
 
 const BODY_LIMIT = 4 * 1024 * 1024;
 const ROOM_WAIT_MS = 60_000;
@@ -176,6 +177,7 @@ function deckShape(customOnly = false) {
 }
 
 interface EnterMatchArgs {
+  name?: string;
   deck?: string;
   ydk?: string;
   main?: number[];
@@ -472,6 +474,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
 
   const enterMatch = async (playerId: PlayerId, args: EnterMatchArgs): Promise<string> => {
     const session = sessions.get(playerId)!;
+    const providedName = args.name === undefined ? undefined : normalizeDeckName(args.name);
     if (customOnly && args.deck !== undefined) throw new Error('Sample decks are forbidden: remove deck, use card_info to build a legal deck, and retry enter_match with ydk or main/extra/side passcodes');
     if (args.deck === undefined && args.ydk === undefined && args.main === undefined) {
       throw new Error(customOnly
@@ -493,7 +496,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     const seat = game.seats.indexOf(playerId);
     if (seat < 0) throw new Error("player is not seated in this game");
     const record: DeckRecord = {
-      name: sampleName ?? `Custom deck ${fingerprint.slice(0, 12)}`,
+      name: providedName ?? sampleName ?? `Custom deck ${fingerprint.slice(0, 12)}`,
       source: args.deck !== undefined ? "sample" : "custom",
       reason: redact(args.reason),
       main: [...deck.main],
@@ -562,6 +565,7 @@ export async function createTournamentMcpServer(options: TournamentMcpServerOpti
     }, async (args: any) => textResult(await recordTool(playerId, "card_info", copyArgs(args), () => run("card_info", args))));
 
     const enterShape = rememberSchema("enter_match", {
+      name: z.string().optional().describe("Optional short descriptive deck name (1–40 characters)."),
       ...deckShape(customOnly),
       reason: z.string().trim().min(1).describe("Private strategic reason for choosing this deck."),
     });

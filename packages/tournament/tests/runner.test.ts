@@ -213,6 +213,7 @@ describe('runner', () => {
     try {
       const result = await runTournament(parseOptions(['--players', 'codex-sol,claude-opus', '--validate']));
       expect(result.scored).toBe(false);
+      expect(result.name).toBe('Agent tournament');
       expect(result.games).toHaveLength(1);
       expect(result.validation?.passed).toBe(false);
       expect(JSON.parse(await readFile(join(root, 'leaderboard.json'), 'utf8')).players).toEqual([]);

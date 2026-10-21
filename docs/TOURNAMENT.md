@@ -188,6 +188,148 @@ pnpm --filter @ygosim/tournament start -- --players pi-grok-46,pi-luna-max --bes
   LP adjudication "time-lp", or equal-LP draw "timeout"; `--on-timeout draw` always draws), or agent exhaustion after match entry. Shared
   infrastructure errors remain unscored and pause further launches.
 
+## HTTP API (game server)
+
+The read-only HTTP API exposes normalized tournament resources for the web client.
+High-level resources come first; the replay and per-seat log routes are lower-level
+building blocks.
+
+```ts
+type TournamentKind = "scored" | "validation" | "legacy";
+type TournamentState = "finished" | "live" | "paused";
+type Provider = "xai" | "deepseek" | "zai" | "google" | "anthropic" | "openai" | "unknown";
+
+interface PlayerRef {
+  id: string; label: string; cli: "codex" | "pi" | "claude" | "agy"; model: string;
+  effort?: string; codeMode?: boolean; provider: Provider; host?: "Fireworks";
+}
+interface ProviderInfo { provider: Provider; host?: "Fireworks" }
+interface Leader { id: string; label: string; points: number; wins: number; losses: number; draws: number }
+interface Progress { done: number; total: number; live: number; errors: number }
+interface TournamentSummary {
+  id: string; name: string; createdAt: string; status: "running" | "done"; paused: boolean;
+  kind: TournamentKind; state: TournamentState; active: boolean; format: Tournament["format"];
+  progress: Progress; done: number; total: number; players: PlayerRef[];
+  leader: Leader | null; champion: string | null;
+}
+interface PublicGame extends Game {
+  durationMs?: number;
+  decks: Record<string, Game["decks"][string] & { title: string }>;
+  live?: { turn: number; phase: string; turnPlayer: 0 | 1; lp: [number, number]; at: string };
+}
+interface TournamentGameResponse {
+  tournament: {
+    id: string; name: string; kind: TournamentKind; state: TournamentState;
+    format: Tournament["format"]; maxMinutes?: number; onTimeout?: "lp" | "draw";
+  };
+  players: [PlayerRef, PlayerRef];
+  game: PublicGame;
+}
+```
+
+`GET /api/tournaments` returns `TournamentSummary[]`. A scored record has
+`kind: "scored"`; an explicit unscored validation has `kind: "validation"`; a
+record without either marker is `kind: "legacy"`. The display name removes one
+trailing ` (unscored validation)` suffix. A finished record has `state: "finished"`.
+A running record has `state: "live"` only while its runner lock belongs to a live
+process; otherwise it is `state: "paused"`. `progress.live` counts running games
+only for the live state. `leader` is selected from completed-game standings by
+points, then Elo, and is null when no game is done. `champion` is populated only
+for a finished tournament: a completed final winner, then a completed series
+winner, then a unique points leader; ties produce null.
+
+`GET /api/tournaments/:tid` returns `Tournament` with the normalized summary
+fields above, enriched `players`, `standings`, and `games: PublicGame[]`. A game's
+`durationMs` is derived from its start and end timestamps. Each visible deck keeps
+its stored fields and adds the concise `title`; legacy generated custom-deck names
+use the first clause of their reason. A running replay may add the latest public
+`live` board state without hands or decks. With live hiding enabled, a non-done
+game returns `decks: {}` and omits reasons, errors, and live board data.
+
+`active` means that a runner currently owns the tournament lock with a live
+process. Missing, empty, malformed, and dead-owner locks are inactive, even when
+the stored tournament status is `running`. A normal exit, game limit,
+infrastructure failure, or signal settles interrupted games back to `pending`;
+the tournament is marked done only when every game is done. Otherwise it remains
+running and records `paused: true` with an ISO `pausedAt` timestamp. Resume clears
+both pause fields and retries unfinished or errored games.
+
+`GET /api/tournaments/:tid/games/:gid` returns `TournamentGameResponse`; `players`
+follow the game's seat order, rather than tournament registration order. Its
+`tournament` object carries only the context needed by a game page, and `game`
+uses the same enriched visibility rules as tournament detail.
+
+`GET /api/tournaments/:tid/games/:gid/timeline?include=tools&cursor=<cursor>`
+returns `{ events, cursor, final }`. Events merge both seats and sort by relative
+milliseconds, with seat 0 first for equal timestamps:
+
+```ts
+type TimelineEvent =
+  | { type: "deck"; at: number; seat: 0 | 1; player: string; title: string;
+      size: { main: number; extra: number; side: number }; reason: string }
+  | { type: "decision"; at: number; seat: 0 | 1; player: string; turn?: number;
+      phase?: string; prompt: { kind: string; label: string }; choice: string[];
+      reason?: string; thinkMs?: number }
+  | { type: "tool"; at: number; seat: 0 | 1; player: string; tool: string;
+      ok: boolean; ms: number; summary: string }
+  | { type: "result"; at: number; winner: string | null; reason: string;
+      lp?: Record<string, number>; turns?: number };
+```
+
+Numeric choices use one-based option numbers, string choices resolve through
+`optionIds`, empty choices become `Pass`, and an unknown choice is returned as a
+string. Prompt kinds have human-readable labels where known and a spaced fallback
+otherwise. Deck events use the successful `enter_match` tool timestamp, or zero
+when no successful entry exists. Tool events are included only when
+`include=tools` is requested and use the same sanitized summaries as the activity
+route; raw arguments and result previews never appear. A done game emits one
+result event at its duration, or at the last event when duration is unavailable.
+`final` is true only for terminal `done` and `error` games.
+
+The timeline cursor is scoped to one tournament and game. Clients should treat it
+as opaque and pass it back unchanged. Internally,
+the offsets track physical source rows, including complete malformed JSON lines,
+while byte lengths detect a shrunk or truncated source even when its row count is
+unchanged. A shrunk source resets that seat's offset. Cursors with invalid
+base64url, scope, version, or fields return 400. Polling with a cursor does not
+repeat previously emitted decisions, tools, deck events, or results.
+
+`GET /api/leaderboard` returns `{ players: (Standing & ProviderInfo)[], decks: DeckStat[], updatedAt }`.
+Only `scored: true` tournaments contribute. `GET /api/leaderboard.csv` returns
+the same standings as CSV. `GET /api/tournaments/:tid/report.md` returns a
+Markdown report, and `GET /api/tournaments/:tid/events` streams SSE change
+notifications. `GET /api` lists the available endpoint paths.
+
+The following low-level routes are per-seat routes and require `:pid` to be one
+of the game's two player IDs:
+
+* `GET /api/tournaments/:tid/games/:gid/decisions/:pid?from=N` → public decision rows
+* `GET /api/tournaments/:tid/games/:gid/activity/:pid?from=N` → sanitized activity rows
+* `GET /api/tournaments/:tid/games/:gid/tools/:pid` → organizer-only raw tool rows
+* `GET /api/tournaments/:tid/games/:gid/transcript/:pid` → organizer-only transcript
+* `GET /api/tournaments/:tid/games/:gid/stderr/:pid` → organizer-only stderr
+
+`GET /api/tournaments/:tid/games/:gid/replay?from=N` is game-level and returns
+replay frames with `X-Frame-Count`. Under `YGOSIM_TOURNAMENT_HIDE_LIVE=1`, public
+decisions, activity, and timeline reads for every non-done game return 403;
+organizer access bypasses this setting. Raw tools, transcripts, and stderr always
+require the organizer bearer token from `YGOSIM_TOURNAMENT_READ_TOKEN`; the
+credential is matched as `Authorization: Bearer <token>`, fails closed when the
+environment variable is absent, and must never be placed in a URL. Decision and
+activity responses keep natural-language strategy text while filtering
+value-shaped secrets; activity never returns raw arguments or result previews.
+The `from` query slices the parsed raw rows before public sanitization, malformed
+JSON lines are skipped, and `X-Row-Count` reports the raw row count. The server
+exposes that header through its CORS policy. Symlinks and traversal outside the
+tournament root are rejected.
+
+`enter_match` accepts an optional descriptive `name`: strip control characters,
+trim, and use 1–40 characters. The stored deck name prefers that value, then the
+sample name, then the generated custom-deck label. API titles preserve descriptive
+names; legacy `Custom deck <hash>` titles use the first reason clause (before
+`. `, `:`, `;`, ` — `, or newline), shortened to 48 characters at a word boundary
+with an ellipsis. Empty reasons retain the stored name.
+
 ## Storage contract (`data/tournaments/`, override with `YGOSIM_TOURNAMENT_DIR`)
 
 ```
@@ -209,66 +351,30 @@ data/leaderboard.json                                     aggregate over all tou
 interface Tournament {
   id: string; name: string; createdAt: string; status: "running" | "done";
   paused?: boolean; pausedAt?: string;
-  format: "round-robin+final";
-  players: { id: string; label: string; cli: "codex" | "pi" | "claude"; model: string; effort?: string }[];
+  format: "round-robin+final" | "best-of-three";
+  players: { id: string; label: string; cli: "codex" | "pi" | "claude" | "agy"; model: string; effort?: string; codeMode?: boolean }[];
   games: Game[];
+  scored?: boolean;
+  deckPolicy?: "choice" | "custom-only";
+  audit?: { revision: string; sourceHash: string; dirty: boolean; node: string; cliVersions: Record<string, string>;
+    server: string; decisionTimeoutMs: number; maxInvalid: number; maxMinutes?: number; onTimeout?: "lp" | "draw";
+    seed: number; cycles: number; mirrored: boolean; validatedBy?: string; deckPolicy?: "choice" | "custom-only" };
+  validation?: { passed: boolean; checkedPlayers: string[]; missingPlayers: string[] };
+  series?: { bestOf: 3; seed: number; wins: Record<string, number>; winner: string | null; complete: boolean };
 }
 interface Game {
-  id: string; stage: "round-robin" | "final"; round: number;
+  id: string; stage: "round-robin" | "final" | "series"; round: number;
   seats: [string, string];                 // player ids, seat 0 goes first-chooser
   status: "pending" | "running" | "done" | "error";
   winner: string | null; reason?: string;  // reason from engine, or "time-lp" / "timeout" / "agent-crash"
   startedAt?: string; endedAt?: string; turns?: number;
   lp?: Record<string, number>;             // final LP by player id; absent on legacy games
-  decks: Record<string, { name: string; source: "sample" | "custom"; reason: string; main: number[]; extra: number[] }>;
-  stats: Record<string, { decisions: number; avgDecisionMs: number; invalid: number; toolCalls: number; resumes: number; reasonsGiven: number }>;
+  decks: Record<string, { name: string; source: "sample" | "custom"; reason: string; main: number[]; extra: number[]; side?: number[]; fingerprint?: string }>;
+  stats: Record<string, { decisions: number; avgDecisionMs: number; invalid: number; toolCalls: number; resumes: number; reasonsGiven: number; timedDecisions?: number; latencyKind?: "response" }>;
   error?: string;
+  seed?: number; cycle?: number; attempt?: number; models?: Record<string, string>; efforts?: Record<string, string>;
 }
 ```
-
-## HTTP API (game server)
-
-* `GET /api/tournaments` → `{ id, name, createdAt, status, paused, active, players, done, total }[]`
-* `GET /api/tournaments/:tid` → `Tournament & { active: boolean, standings: Standing[] }`; running games
-  may include `live: { turn, phase, turnPlayer, lp: [number, number], at: string }`
-  from the latest available replay state (no hands or decks). `at` is ISO time;
-  unavailable state is omitted. The wall-time cap remains public in `audit.maxMinutes`.
-* `GET /api/tournaments/:tid/games/:gid/replay` → `{ t, msg }[]`
-* `GET /api/tournaments/:tid/games/:gid/decisions/:pid?from=N` → decision rows
-* `GET /api/tournaments/:tid/games/:gid/activity/:pid?from=N` → sanitised activity
-  rows `{ t, tool, ok, ms, summary }` (option labels, deck sizes, card query, or status)
-* `GET /api/leaderboard` → `{ players: Standing[], decks: DeckStat[], updatedAt }`
-* `GET /api/leaderboard.csv` → CSV standings
-* `GET /api/tournaments/:tid/report.md` → Markdown summary
-* `GET /api/tournaments/:tid/events` → SSE change notifications
-* Replay accepts `?from=<frame>` and returns `X-Frame-Count`.
-
-`active` means a runner currently owns the tournament lock with a live process;
-missing, empty, malformed, or dead-owner locks are inactive, even for legacy records
-whose status is `running`. On normal exit, a game limit, infrastructure failure,
-or SIGINT/SIGTERM, the runner settles interrupted games back to `pending` and
-records `done` only when every game is done. Otherwise it keeps `running` for
-resume, sets `paused: true`, and records `pausedAt` as an ISO timestamp. Resume
-clears both pause fields and retries unfinished or errored games. A forced kill
-cannot persist pause metadata; `active` still detects its dead owner. Summary
-rows always include a boolean `paused` (false when absent in storage).
-
-Live decklists, deck-choice reasons, game reasons/errors, decisions, and activity
-are public by default, including in Markdown reports. Set
-`YGOSIM_TOURNAMENT_HIDE_LIVE=1` on the game server to restore privacy until each
-game finishes: public detail/reports omit live board summaries, deck data and reasons/diagnostics,
-and live decisions/activity return 403. Organizer access bypasses this setting.
-Decision fields and activity summaries filter value-shaped secrets while keeping
-natural-language strategy text (including Token monsters and board configuration).
-Activity never returns raw arguments or result previews. Both log endpoints
-accept a non-negative integer `from` (default 0), slice parsed raw rows before
-sanitisation, and return total parsed raw rows in `X-Row-Count`; malformed JSON
-lines are skipped. Row-count headers are exposed through the server's CORS policy.
-Raw tool logs, transcripts, and stderr always require an organizer bearer token
-matching the server's `YGOSIM_TOURNAMENT_READ_TOKEN`. Set that variable securely in
-the server environment; do not commit it, give it to agents, or put it in a URL.
-Without the variable, private reads fail closed. Organizer routes are
-`.../games/:gid/tools/:pid`, `.../transcript/:pid`, and `.../stderr/:pid`.
 
 New decision rows store response latency in `ms`, `latencyKind: "response"`,
 and separate tool execution/wait duration in `toolMs`. Timing begins when a

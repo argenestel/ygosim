@@ -244,7 +244,7 @@ describe("tournament MCP private accounting", () => {
     const p0 = await initialize(bridge, 'p0'); const p1 = await initialize(bridge, 'p1');
     await Promise.all([
       p1.tools.get('enter_match')!.callback({ deck: 'Starter', reason: 'seat one private reason' }),
-      p0.tools.get('enter_match')!.callback({ deck: 'starter', reason: 'seat zero private reason' }),
+      p0.tools.get('enter_match')!.callback({ name: '\u0000  Seat Zero Deck  ', deck: 'starter', reason: 'seat zero private reason' }),
     ]);
     expect(fakeSpectator.order).toEqual(['spectate', 'join']);
     const replay = rows(join(gameDir, 'replay.jsonl'));
@@ -254,13 +254,25 @@ describe("tournament MCP private accounting", () => {
     expect(replay.at(-1).msg.status).toBe('done');
     expect(JSON.stringify(replay)).not.toContain('private reason');
     expect(game.decks.p0!.reason).toBe('seat zero private reason');
-    expect(game.decks.p0!.name).toBe('Starter');
+    expect(game.decks.p0!.name).toBe('Seat Zero Deck');
+    expect(game.decks.p1!.name).toBe('Starter');
     expect(game.stats.p0).toMatchObject({ toolCalls: 1, decisions: 0, reasonsGiven: 0 });
     const original = bridge.sessions.get('p0');
     game.stats.p0!.resumes = 3;
     await initialize(bridge, 'p0');
     expect(bridge.sessions.get('p0')).toBe(original);
     expect(game.stats.p0!.resumes).toBe(3);
+    await bridge.close();
+  });
+  it('rejects overlong custom names before persisting a deck', async () => {
+    const gameDir = join(tmpdir(), `ygosim-mcp-name-${Date.now()}`); dirs.push(gameDir);
+    const game = gameFixture();
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => ({ ok: true }) })));
+    const bridge = await createTournamentMcpServer({ game, gameDir, server: 'ws://game.test', deckPolicy: 'custom-only' });
+    const mcp = await initialize(bridge);
+    await expect(mcp.tools.get('enter_match')!.callback({ name: 'x'.repeat(41), main: [2, 3], extra: [], reason: 'independent selection' }))
+      .rejects.toThrow('shorten it and retry enter_match');
+    expect(game.decks).toEqual({});
     await bridge.close();
   });
   it('marks server-rejected actions invalid even when Session reports the error as text', async () => {
@@ -385,9 +397,9 @@ describe("tournament MCP private accounting", () => {
     await expect(mcp.tools.get('enter_match')!.callback({ main: [1], extra: [], side: [9], reason: 'copy with a new side' })).rejects.toThrow('exactly match');
     await expect(mcp.tools.get('enter_match')!.callback({ ydk: '#main\n1\n#extra\n!side\n', reason: 'copy as YDK' })).rejects.toThrow('exactly match');
     expect(game.decks).toEqual({}); expect(bridge.sessions.get('p0')!.client.room).toBeUndefined();
-    await mcp.tools.get('enter_match')!.callback({ main: [2, 3], extra: [4], side: [5], reason: 'independent selection' });
-    expect(game.decks.p0).toMatchObject({ source: 'custom', main: [2, 3], extra: [4], side: [5], fingerprint: expect.any(String) });
-    expect(JSON.parse(readFileSync(join(gameDir, 'p0.deck.json'), 'utf8'))).toMatchObject({ main: [2, 3], extra: [4], side: [5], reason: 'independent selection' });
+    await mcp.tools.get('enter_match')!.callback({ name: 'Independent Control', main: [2, 3], extra: [4], side: [5], reason: 'independent selection' });
+    expect(game.decks.p0).toMatchObject({ name: 'Independent Control', source: 'custom', main: [2, 3], extra: [4], side: [5], fingerprint: expect.any(String) });
+    expect(JSON.parse(readFileSync(join(gameDir, 'p0.deck.json'), 'utf8'))).toMatchObject({ name: 'Independent Control', main: [2, 3], extra: [4], side: [5], reason: 'independent selection' });
     expect(readFileSync(join(gameDir, 'p0.deck.ydk'), 'utf8')).toBe('#main\n2\n3\n#extra\n4\n!side\n5\n');
     await bridge.close();
   });

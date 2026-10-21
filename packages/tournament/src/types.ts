@@ -1,11 +1,31 @@
 import type { ServerMsg } from '@ygosim/protocol';
 
 export type Cli = "codex" | "pi" | "claude" | "agy";
+export type Provider = "xai" | "deepseek" | "zai" | "google" | "anthropic" | "openai" | "unknown";
 export type GameStage = "round-robin" | "final" | "series";
 export type GameStatus = "pending" | "running" | "done" | "error";
 export type TournamentStatus = "running" | "done";
 export type DeckSource = "sample" | "custom";
 export type DeckPolicy = "choice" | "custom-only";
+
+export type TournamentKind = "scored" | "validation" | "legacy";
+export type TournamentState = "finished" | "live" | "paused";
+
+export interface Progress {
+  done: number;
+  total: number;
+  live: number;
+  errors: number;
+}
+
+export interface Leader {
+  id: string;
+  label: string;
+  points: number;
+  wins: number;
+  losses: number;
+  draws: number;
+}
 
 export interface Player {
   id: string;
@@ -15,6 +35,11 @@ export interface Player {
   effort?: string;
   /** Opt in to Codex code mode for models that require it to reach MCP tools. */
   codeMode?: boolean;
+}
+
+export interface PlayerRef extends Player {
+  provider: Provider;
+  host?: "Fireworks";
 }
 
 export interface DeckInfo {

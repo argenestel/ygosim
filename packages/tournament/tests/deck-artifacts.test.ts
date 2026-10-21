@@ -32,6 +32,7 @@ it('makes building mandatory in the custom-only prompt without requiring filesys
   expect(prompt).toContain('card_info with code, name, or query'); expect(prompt).toContain('Forbidden/Limited/Semi-Limited');
   expect(prompt).toContain('40–60 main'); expect(prompt).toContain('Fusion/Synchro/Xyz/Link'); expect(prompt).toContain('monster/spell/trap ratio');
   expect(prompt).toContain('main/extra/side passcode arrays or YDK'); expect(prompt).toContain('archetype'); expect(prompt).toContain('staples'); expect(prompt).toContain('extra-deck plan');
+  expect(prompt).toContain('short descriptive name'); expect(prompt).toContain('enter_match');
   expect(prompt).toContain('exact game validation error'); expect(prompt).toContain('fix and retry'); expect(prompt).toContain('DUEL OVER');
   expect(prompt).toContain('JSON and YDK'); expect(prompt).not.toContain('Choose a legal deck using list_decks or');
 });

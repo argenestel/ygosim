@@ -27,6 +27,7 @@
     "node": ">=22"
   },
   "exports": {
+    "./providers": "./src/providers.ts",
     "./standings": "./src/standings.ts",
     "./storage": "./src/storage.ts",
     "./types": "./src/types.ts"
