@@ -7,8 +7,8 @@ import type { DuelLaunch } from "./duel/DuelScreen";
 import { DeckEditor } from "./screens/DeckEditor";
 import { DeckList } from "./screens/DeckList";
 import { Home } from "./screens/Home";
-import { TournamentScreen } from "./tournament/TournamentScreen";
-import type { TGame, Tournament } from "./tournament/api";
+import { TournamentScreen, hasArenaRoute } from "./tournament/TournamentScreen";
+import type { GameView } from "./tournament/api";
 import "./styles.css";
 
 /** Dev-only probe: counts how often the app-level loading screen replaces the duel. */
@@ -21,14 +21,11 @@ function ArenaFallback() {
 const DuelScreen = lazy(() => import("./duel/DuelScreen").then((m) => ({ default: m.DuelScreen })));
 const ReplayScreen = lazy(() => import("./tournament/ReplayScreen").then((m) => ({ default: m.ReplayScreen })));
 
-type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: "duel"; launch: DuelLaunch; key: number } | { s: "tourney" } | { s: "replay"; t: Tournament; g: TGame };
-const requestedTournament = new URLSearchParams(location.search).get("tournament");
-const initialTournament = requestedTournament && /^[a-zA-Z0-9_-]+$/.test(requestedTournament) ? requestedTournament : undefined;
+type Screen = { s: "home" } | { s: "decks" } | { s: "edit"; id: string } | { s: "duel"; launch: DuelLaunch; key: number } | { s: "tourney" } | { s: "replay"; view: GameView };
 
 function App() {
-  const [screen, setScreen] = useState<Screen>(initialTournament ? { s: "tourney" } : { s: "home" });
+  const [screen, setScreen] = useState<Screen>(hasArenaRoute() ? { s: "tourney" } : { s: "home" });
   const [name, setName] = useState(playerName());
-  const [tourneyId, setTourneyId] = useState(initialTournament ?? "board"); // survives opening a replay and coming back
   const [cover, setCover] = useState(() => { const p = activeProfile(); return p ? coverOf(p) : undefined; });
   useEffect(() => onDecksChanged(() => { const p = activeProfile(); setCover(p ? coverOf(p) : undefined); }), []);
   useEffect(() => { seedSampleDecks(listPresetDecks); }, []);
@@ -37,7 +34,7 @@ function App() {
   if (screen.s === "replay") {
     return (
       <Suspense fallback={<ArenaFallback />}>
-        <ReplayScreen t={screen.t} game={screen.g} onExit={() => setScreen({ s: "tourney" })} />
+        <ReplayScreen view={screen.view} onExit={() => setScreen({ s: "tourney" })} />
       </Suspense>
     );
   }
@@ -57,7 +54,11 @@ function App() {
         <nav className="nav">
           <button className={screen.s === "home" ? "on" : ""} onClick={() => setScreen({ s: "home" })}>Duel</button>
           <button className={screen.s === "decks" ? "on" : ""} onClick={() => setScreen({ s: "decks" })}>Decks</button>
-          <button className={screen.s === "tourney" ? "on" : ""} onClick={() => setScreen({ s: "tourney" })}>Tournament</button>
+          <button className={screen.s === "tourney" ? "on" : ""} onClick={() => {
+            // From inside an event or match, the tab returns to the arena home.
+            if (screen.s === "tourney" && location.search) { history.pushState(null, "", location.pathname); dispatchEvent(new PopStateEvent("popstate")); }
+            setScreen({ s: "tourney" });
+          }}>Tournament</button>
         </nav>
         <span className="spacer" />
         <label className="player-pill" title="Your duelist name">
@@ -67,7 +68,7 @@ function App() {
       </header>
       <main className="page">
         {screen.s === "home" && <Home onPlay={(launch) => setScreen({ s: "duel", launch, key: Date.now() })} onDecks={() => setScreen({ s: "decks" })} onEdit={(id) => setScreen({ s: "edit", id })} />}
-        {screen.s === "tourney" && <TournamentScreen selected={tourneyId} onSelect={setTourneyId} onReplay={(t, g) => setScreen({ s: "replay", t, g })} />}
+        {screen.s === "tourney" && <TournamentScreen onReplay={(view) => setScreen({ s: "replay", view })} />}
         {screen.s === "decks" && <DeckList onEdit={(id) => setScreen({ s: "edit", id })} />}
       </main>
     </div>

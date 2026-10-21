@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Tail } from "./api";
+import type { Timeline, TimelineEvent } from "./api";
 
 /**
  * Poll `load` while `every(value)` returns a delay (ms); return false/0 to stop.
@@ -36,59 +36,55 @@ export function usePoll<T>(load: () => Promise<T>, deps: unknown[], every: (v: T
 }
 
 /**
- * Accumulate an append-only server list by asking only for rows after the ones
- * we already have. Keeps tailing while `live`, and makes one last fetch when the
- * game ends so the final rows are never missed.
+ * Follow a match timeline with the server's opaque cursor: each poll returns only new events.
+ * Stops once the server says the stream is final.
  */
-export function useTail<T>(fetchFrom: (from: number) => Promise<Tail<T>>, key: string, live: boolean, intervalMs = 2500) {
-  const [rows, setRows] = useState<T[]>([]);
+export function useTimeline(fetch: (cursor: string) => Promise<Timeline>, key: string, live: boolean, intervalMs = 2500) {
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
   const [error, setError] = useState<string>();
   const [loaded, setLoaded] = useState(false);
-  const fetchRef = useRef(fetchFrom);
-  fetchRef.current = fetchFrom;
-  const state = useRef({ key, from: 0 });
+  const fetchRef = useRef(fetch);
+  fetchRef.current = fetch;
+  const state = useRef({ key, cursor: "", final: false });
 
   useEffect(() => {
-    if (state.current.key !== key) { state.current = { key, from: 0 }; setRows([]); setLoaded(false); }
-    let on = true, timer: ReturnType<typeof setTimeout> | undefined, finals = live ? 0 : 1;
+    if (state.current.key !== key) { state.current = { key, cursor: "", final: false }; setEvents([]); setLoaded(false); }
+    let on = true, timer: ReturnType<typeof setTimeout> | undefined;
     const tick = async () => {
-      if (!on) return;
+      if (!on || state.current.final) return;
       if (document.hidden) { timer = setTimeout(tick, 1000); return; }
       try {
-        const { rows: next, total } = await fetchRef.current(state.current.from);
+        const page = await fetchRef.current(state.current.cursor);
         if (!on) return;
-        if (total < state.current.from) {
-          // The source restarted (a resumed game starts fresh logs): drop stale rows and re-read from the top.
-          state.current.from = 0; setRows([]); timer = setTimeout(tick, 0); return;
-        }
-        state.current.from = total;
-        if (next.length) setRows((r) => [...r, ...next]);
+        state.current.cursor = page.cursor; state.current.final = page.final;
+        if (page.events.length) setEvents((e) => [...e, ...page.events].sort((a, b) => a.at - b.at));
         setError(undefined); setLoaded(true);
-        if (live) timer = setTimeout(tick, intervalMs);
+        if (!page.final) timer = setTimeout(tick, live ? intervalMs : 4000);
       } catch (e) {
         if (!on) return;
         setError(String((e as Error)?.message ?? e)); setLoaded(true);
-        if (live || finals-- > 0) timer = setTimeout(tick, live ? 10_000 : 3000);
+        timer = setTimeout(tick, 10_000);
       }
     };
     tick();
     return () => { on = false; clearTimeout(timer); };
   }, [key, live, intervalMs]);
 
-  return { rows, error, loaded };
+  return { events, error, loaded };
 }
 
-/** Keep a scroll container pinned to its newest row unless the reader scrolled away. */
-export function useFollow<E extends HTMLElement>(count: number) {
+/** While `follow` is on (live games), keep a scroll container pinned to its newest row unless the reader scrolled away. */
+export function useFollow<E extends HTMLElement>(count: number, follow = true) {
   const ref = useRef<E>(null);
-  const pinned = useRef(true);
+  const pinned = useRef(follow);
   const [away, setAway] = useState(false);
   const onScroll = useCallback(() => {
     const el = ref.current; if (!el) return;
     const atEnd = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
     pinned.current = atEnd; setAway((a) => (a === !atEnd ? a : !atEnd));
   }, []);
-  useEffect(() => { const el = ref.current; if (el && pinned.current) el.scrollTop = el.scrollHeight; }, [count]);
+  useEffect(() => { pinned.current = follow; if (!follow) setAway(false); }, [follow]);
+  useEffect(() => { const el = ref.current; if (el && follow && pinned.current) el.scrollTop = el.scrollHeight; }, [count, follow]);
   const jump = useCallback(() => { const el = ref.current; if (el) { el.scrollTop = el.scrollHeight; pinned.current = true; setAway(false); } }, []);
   return { ref, onScroll, away, jump };
 }
