@@ -1,6 +1,18 @@
 import { describe, it, expect } from "vitest";
+import { buildApi } from "../src/server.js";
+import { Lobby } from "../src/lobby.js";
 
 describe("API Endpoints", () => {
+  it("lists cropped card art in the API index", async () => {
+    const app = buildApi(new Lobby(async () => { throw new Error("unused"); }), () => null, () => null, async () => null);
+    const response = await app.request("/api");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      name: "ygosim API",
+      endpoints: expect.arrayContaining([{ method: "GET", path: "/api/img/crop/:code", description: "Cropped card art" }]),
+    });
+  });
+
   it("should have GET /api/agents endpoint", () => {
     // This is a compile-time check that the endpoint exists
     expect(true).toBe(true);

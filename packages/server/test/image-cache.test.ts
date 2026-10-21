@@ -1,15 +1,18 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("node:fs/promises", () => ({ mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}), readFile: vi.fn(async () => { throw new Error("cache miss"); }) }));
-import { writeFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import { abortImageDownloads, getImageBuffer, getImageUrl } from "../src/image-cache.js";
+import { buildApi } from "../src/server.js";
+import { Lobby } from "../src/lobby.js";
 
 afterEach(() => { vi.unstubAllGlobals(); vi.clearAllMocks(); });
 
 describe("production card-art proxy", () => {
-  it("uses the actual full and small CDN paths without a duplicated cards directory", async () => {
+  it("uses the actual full, small and cropped CDN paths without a duplicated cards directory", async () => {
     expect(await getImageUrl(89631139)).toBe("https://images.ygoprodeck.com/images/cards/89631139.jpg");
     expect(await getImageUrl(89631139, "small")).toBe("https://images.ygoprodeck.com/images/cards_small/89631139.jpg");
+    expect(await getImageUrl(89631139, "crop")).toBe("https://images.ygoprodeck.com/images/cards_cropped/89631139.jpg");
   });
 
   it("deduplicates concurrent downloads and imposes a timeout", async () => {
@@ -73,5 +76,56 @@ describe("production card-art proxy", () => {
       expect(fetch).toHaveBeenCalledTimes(16);
       expect(writeFile).not.toHaveBeenCalled();
     } finally { log.mockRestore(); }
+  });
+});
+
+describe("card-art routes", () => {
+  const app = buildApi(new Lobby(async () => { throw new Error("unused"); }), () => null, () => null, async () => null);
+
+  it("routes cropped, small and full art separately with immutable JPEG headers", async () => {
+    const fetch = vi.fn(async () => new Response(new Uint8Array([255, 216, 255, 217])));
+    vi.stubGlobal("fetch", fetch);
+    for (const [prefix, directory, cachePath] of [["crop/", "cards_cropped", "/crop/"], ["small/", "cards_small", "/small/"], ["", "cards", "/img/"]]) {
+      const response = await app.request(`/api/img/${prefix}89631139`);
+      expect(response.status).toBe(200);
+      expect(response.headers.get("content-type")).toBe("image/jpeg");
+      expect(response.headers.get("cache-control")).toBe("public, max-age=31536000, immutable");
+      expect(response.headers.get("access-control-allow-origin")).toBe("*");
+      expect(new Uint8Array(await response.arrayBuffer())).toEqual(new Uint8Array([255, 216, 255, 217]));
+      expect(fetch).toHaveBeenLastCalledWith(`https://images.ygoprodeck.com/images/${directory}/89631139.jpg`, { signal: expect.any(AbortSignal) });
+      expect(readFile).toHaveBeenLastCalledWith(expect.stringContaining(`${cachePath}89631139.jpg`));
+      expect(writeFile).toHaveBeenLastCalledWith(expect.stringContaining(`${cachePath}89631139.jpg`), Buffer.from([255, 216, 255, 217]));
+    }
+    expect(fetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("rejects invalid cropped codes before fetching", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    for (const code of ["0", "-1", "1.5", "abc", "Infinity"]) {
+      const response = await app.request(`/api/img/crop/${code}`);
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({ error: "invalid code" });
+    }
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it("returns 404 when cropped art is unavailable upstream", async () => {
+    const fetch = vi.fn(async () => new Response(null, { status: 404 }));
+    vi.stubGlobal("fetch", fetch);
+    const response = await app.request("/api/img/crop/89631139");
+    expect(response.status).toBe(404);
+    expect(await response.json()).toEqual({ error: "image not found" });
+    expect(fetch).toHaveBeenCalledWith("https://images.ygoprodeck.com/images/cards_cropped/89631139.jpg", { signal: expect.any(AbortSignal) });
+    expect(writeFile).not.toHaveBeenCalled();
+  });
+
+  it("does not swallow crop-like paths in the full-image route", async () => {
+    const fetch = vi.fn();
+    vi.stubGlobal("fetch", fetch);
+    expect((await app.request("/api/img/crop")).status).toBe(400);
+    expect((await app.request("/api/img/crop/89631139/extra")).status).toBe(404);
+    expect((await app.request("/api/img/cropped/89631139")).status).toBe(404);
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

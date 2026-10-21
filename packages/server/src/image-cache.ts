@@ -17,7 +17,7 @@ export function abortImageDownloads(): void {
 
 export interface CacheEntry {
   url: string;
-  size: "full" | "small";
+  size: "full" | "small" | "crop";
   code: number;
 }
 
@@ -29,18 +29,18 @@ export async function ensureImgDir() {
   }
 }
 
-function getImagePath(code: number, size: "full" | "small" = "full"): string {
-  const dir = size === "small" ? join(IMG_DIR, "small") : IMG_DIR;
+function getImagePath(code: number, size: "full" | "small" | "crop" = "full"): string {
+  const dir = size === "full" ? IMG_DIR : join(IMG_DIR, size);
   const fileName = `${code}.jpg`;
   return join(dir, fileName);
 }
 
-export async function getImageUrl(code: number, size: "full" | "small" = "full"): Promise<string> {
-  const sizeDir = size === "small" ? "cards_small" : "cards";
+export async function getImageUrl(code: number, size: "full" | "small" | "crop" = "full"): Promise<string> {
+  const sizeDir = size === "crop" ? "cards_cropped" : size === "small" ? "cards_small" : "cards";
   return `${YGOPRODECK_CDN}/${sizeDir}/${code}.jpg`;
 }
 
-export async function getImageBuffer(code: number, size: "full" | "small" = "full"): Promise<Buffer | null> {
+export async function getImageBuffer(code: number, size: "full" | "small" | "crop" = "full"): Promise<Buffer | null> {
   const path = getImagePath(code, size);
   const version = generation;
   try {

@@ -38,6 +38,7 @@ const API_ENDPOINTS = [
   ["/api/tournament-capabilities", "Tournament runner capabilities"],
   ["/api/cards", "Search cards"],
   ["/api/cards/:code", "Card details"],
+  ["/api/img/crop/:code", "Cropped card art"],
   ["/api/rooms", "List rooms"],
 ].map(([path, description]) => ({ method: "GET", path, description }));
 

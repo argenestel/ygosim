@@ -115,10 +115,10 @@ export function buildApi(
     });
   });
 
-  app.get("/api/img/:code", async (c) => {
+  app.get("/api/img/crop/:code", async (c) => {
     const code = Number(c.req.param("code"));
     if (!Number.isInteger(code) || code <= 0) return c.json({ error: "invalid code" }, 400);
-    const buffer = await getImageBuffer(code, "full");
+    const buffer = await getImageBuffer(code, "crop");
     if (!buffer) return c.json({ error: "image not found" }, 404);
     return c.newResponse(new Uint8Array(buffer), 200, {
       "Content-Type": "image/jpeg",
@@ -131,6 +131,18 @@ export function buildApi(
     const code = Number(c.req.param("code"));
     if (!Number.isInteger(code) || code <= 0) return c.json({ error: "invalid code" }, 400);
     const buffer = await getImageBuffer(code, "small");
+    if (!buffer) return c.json({ error: "image not found" }, 404);
+    return c.newResponse(new Uint8Array(buffer), 200, {
+      "Content-Type": "image/jpeg",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Access-Control-Allow-Origin": "*",
+    });
+  });
+
+  app.get("/api/img/:code", async (c) => {
+    const code = Number(c.req.param("code"));
+    if (!Number.isInteger(code) || code <= 0) return c.json({ error: "invalid code" }, 400);
+    const buffer = await getImageBuffer(code, "full");
     if (!buffer) return c.json({ error: "image not found" }, 404);
     return c.newResponse(new Uint8Array(buffer), 200, {
       "Content-Type": "image/jpeg",
