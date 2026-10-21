@@ -53,11 +53,18 @@ export async function choose(page: Page, prompt: Prompt, ids: string[]) {
     } else if (prompt.kind === 'select_place') {
       await boardClick(page, 'places', id);
     } else {
-      // Phase moves live in the top phase bar as "Battle →"-style buttons titled with the engine label; other
-      // board-menu options (e.g. Shuffle hand) and non-board prompts render their label text in the prompt panel.
+      // Board menus: phase moves are the phase bar's "Battle →" buttons (titled with the engine label); the
+      // action dock shows the next step as its main button and tucks the rest (e.g. Shuffle hand) behind ⋯.
+      // Every other prompt renders its options as labelled buttons in the prompt panel.
       const phaseGo = page.locator(`.phase-bar .phase-go[title="${option.label}"]`);
+      const dock = page.locator('.action-dock');
+      const dockMain = dock.locator('.dock-main', { hasText: `${option.label.replace(/^Go to /, '')} →` });
       if (boardMenu && await phaseGo.count()) await phaseGo.last().click();
-      else await page.locator('.prompt-panel, .phase-bar, .card-menu').getByText(option.label, { exact: true }).last().click();
+      else if (boardMenu && await dockMain.count()) await dockMain.click();
+      else if (boardMenu) {
+        await dock.getByRole('button', { name: 'More actions' }).click();
+        await dock.locator('.dock-menu').getByText(option.label, { exact: true }).click();
+      } else await page.locator('.prompt-panel').getByText(option.label, { exact: true }).last().click();
     }
   }
   if (!boardMenu && (await observation(page)).prompt?.promptId === prompt.promptId && await page.locator('.prompt-panel .confirm').isVisible()) {
